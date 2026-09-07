@@ -11,15 +11,6 @@ import (
 	"unsafe"
 )
 
-// GOARCH=wasm currently has 64 bits pointers, but the WebAssembly host expects
-// pointers to be 32 bits so we use this type alias to represent pointers in
-// structs and arrays passed as arguments to WASI functions.
-//
-// Note that the use of an integer type prevents the compiler from tracking
-// pointers passed to WASI functions, so we must use KeepAlive to explicitly
-// retain the objects that could otherwise be reclaimed by the GC.
-type uintptr32 = uint32
-
 // https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-size-u32
 type size = uint32
 
@@ -42,7 +33,8 @@ const (
 
 // https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-iovec-record
 type iovec struct {
-	buf    uintptr32
+	_      structs.HostLayout
+	buf    wasiPtr
 	bufLen size
 }
 
@@ -51,7 +43,7 @@ func exit(code int32)
 
 //go:wasmimport wasi_snapshot_preview1 args_get
 //go:noescape
-func args_get(argv *uintptr32, argvBuf *byte) errno
+func args_get(argv *wasiPtr, argvBuf *byte) errno
 
 //go:wasmimport wasi_snapshot_preview1 args_sizes_get
 //go:noescape
@@ -63,7 +55,7 @@ func clock_time_get(clock_id clockid, precision timestamp, time *timestamp) errn
 
 //go:wasmimport wasi_snapshot_preview1 environ_get
 //go:noescape
-func environ_get(environ *uintptr32, environBuf *byte) errno
+func environ_get(environ *wasiPtr, environBuf *byte) errno
 
 //go:wasmimport wasi_snapshot_preview1 environ_sizes_get
 //go:noescape
@@ -71,7 +63,7 @@ func environ_sizes_get(environCount, environBufLen *size) errno
 
 //go:wasmimport wasi_snapshot_preview1 fd_write
 //go:noescape
-func fd_write(fd int32, iovs unsafe.Pointer, iovsLen size, nwritten *size) errno
+func fd_write(fd int32, iovs *iovec, iovsLen size, nwritten *size) errno
 
 //go:wasmimport wasi_snapshot_preview1 random_get
 //go:noescape
@@ -160,11 +152,11 @@ func poll_oneoff(in *subscription, out *event, nsubscriptions size, nevents *siz
 
 func write1(fd uintptr, p unsafe.Pointer, n int32) int32 {
 	iov := iovec{
-		buf:    uintptr32(uintptr(p)),
+		buf:    makeWASIPtr((*byte)(p)),
 		bufLen: size(n),
 	}
 	var nwritten size
-	if fd_write(int32(fd), unsafe.Pointer(&iov), 1, &nwritten) != 0 {
+	if fd_write(int32(fd), &iov, 1, &nwritten) != 0 {
 		throw("fd_write failed")
 	}
 	return int32(nwritten)
@@ -205,14 +197,14 @@ func goenvs() {
 
 	argslice = make([]string, argc)
 	if argc > 0 {
-		argv := make([]uintptr32, argc)
+		argv := make([]wasiPtr, argc)
 		argvBuf := make([]byte, argvBufLen)
 		if args_get(&argv[0], &argvBuf[0]) != 0 {
 			throw("args_get failed")
 		}
 
 		for i := range argslice {
-			start := argv[i] - uintptr32(uintptr(unsafe.Pointer(&argvBuf[0])))
+			start := wasiPtrOffset(argv[i], &argvBuf[0])
 			end := start
 			for argvBuf[end] != 0 {
 				end++
@@ -230,14 +222,14 @@ func goenvs() {
 
 	envs = make([]string, environCount)
 	if environCount > 0 {
-		environ := make([]uintptr32, environCount)
+		environ := make([]wasiPtr, environCount)
 		environBuf := make([]byte, environBufLen)
 		if environ_get(&environ[0], &environBuf[0]) != 0 {
 			throw("environ_get failed")
 		}
 
 		for i := range envs {
-			start := environ[i] - uintptr32(uintptr(unsafe.Pointer(&environBuf[0])))
+			start := wasiPtrOffset(environ[i], &environBuf[0])
 			end := start
 			for environBuf[end] != 0 {
 				end++

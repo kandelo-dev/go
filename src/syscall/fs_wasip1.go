@@ -27,7 +27,6 @@ func init() {
 	SetNonblock(2, true)
 }
 
-type uintptr32 = uint32
 type size = uint32
 type fdflags = uint32
 type filesize = uint64
@@ -42,7 +41,7 @@ type fstflags = uint32
 
 type iovec struct {
 	_      structs.HostLayout
-	buf    uintptr32
+	buf    wasiPtr
 	bufLen size
 }
 
@@ -892,7 +891,7 @@ func Fsync(fd int) error {
 
 func makeIOVec(b []byte) *iovec {
 	return &iovec{
-		buf:    uintptr32(uintptr(unsafe.Pointer(unsafe.SliceData(b)))),
+		buf:    makeWASIPtr(unsafe.SliceData(b)),
 		bufLen: size(len(b)),
 	}
 }

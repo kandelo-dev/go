@@ -7,6 +7,7 @@
 package syscall_test
 
 import (
+	"strconv"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -77,9 +78,13 @@ func BenchmarkJoinPath(b *testing.B) {
 }
 
 func TestRandomGetOverflow(t *testing.T) {
+	if strconv.IntSize == 32 {
+		t.Skip("test needs a 64-bit int to express a length larger than 4GiB")
+	}
 	// Use unsafe.Slice to avoid actually allocating ~4GB.
 	var dummy byte
-	b := unsafe.Slice(&dummy, int(1<<32))
+	length := int64(1) << 32
+	b := unsafe.Slice(&dummy, int(length))
 	if err := syscall.RandomGet(b); err != syscall.EINVAL {
 		t.Errorf("syscall.RandomGet succeeds given a slice that is larger than what random_get supports, want %v", syscall.EINVAL)
 	}
