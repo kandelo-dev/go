@@ -324,7 +324,7 @@ var errUnmarshalDepth = errors.New("exceeded max depth")
 
 // Unmarshal a single XML element into val.
 func (d *Decoder) unmarshal(val reflect.Value, start *StartElement) error {
-	if d.stkDepth > maxUnmarshalDepth || runtime.GOARCH == "wasm" && d.stkDepth > maxUnmarshalDepthWasm {
+	if d.stkDepth > maxUnmarshalDepth || (runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32") && d.stkDepth > maxUnmarshalDepthWasm {
 		return errUnmarshalDepth
 	}
 	// Find start element if we need it.

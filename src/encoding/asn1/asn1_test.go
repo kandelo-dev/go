@@ -1259,7 +1259,7 @@ func TestUnmarshalNestingLimitSlice(t *testing.T) {
 	type Recursive []Recursive
 
 	limit := 10000
-	if runtime.GOARCH == "wasm" {
+	if runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32" {
 		limit = 5000
 	}
 
@@ -1305,7 +1305,7 @@ func TestUnmarshalNestingLimitStruct(t *testing.T) {
 	}
 
 	limit := 5000
-	if runtime.GOARCH == "wasm" {
+	if runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32" {
 		limit = 2500
 	}
 

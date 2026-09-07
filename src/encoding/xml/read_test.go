@@ -1113,7 +1113,7 @@ func TestCVE202228131(t *testing.T) {
 }
 
 func TestCVE202230633(t *testing.T) {
-	if testing.Short() || runtime.GOARCH == "wasm" {
+	if testing.Short() || runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32" {
 		t.Skip("test requires significant memory")
 	}
 	defer func() {
@@ -1151,7 +1151,7 @@ func TestDecodeElementRecursion(t *testing.T) {
 		t.Skip("test requires significant memory")
 	}
 	maxDepth := maxUnmarshalDepth
-	if runtime.GOARCH == "wasm" {
+	if runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32" {
 		maxDepth = maxUnmarshalDepthWasm
 	}
 	tests := []struct {

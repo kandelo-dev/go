@@ -713,7 +713,7 @@ func parseField(v reflect.Value, bytes []byte, initOffset int, params fieldParam
 		maxDecodeDepth     = 10000
 		maxDecodeDepthWasm = 5000 // go.dev/issue/56498
 	)
-	if depth > maxDecodeDepth || runtime.GOARCH == "wasm" && depth > maxDecodeDepthWasm {
+	if depth > maxDecodeDepth || (runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32") && depth > maxDecodeDepthWasm {
 		return initOffset, StructuralError{"nesting depth exceeded"}
 	}
 	offset = initOffset

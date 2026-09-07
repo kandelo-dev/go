@@ -52,7 +52,7 @@ func Supported() error {
 	// Also, js/wasm and windows/386 don't have good enough timers
 	// for the CPU jitter entropy source.
 	switch {
-	case runtime.GOARCH == "wasm",
+	case runtime.GOARCH == "wasm", runtime.GOARCH == "wasm32",
 		runtime.GOOS == "windows" && runtime.GOARCH == "386",
 		runtime.GOOS == "openbsd", // due to -fexecute-only, see #70880
 		runtime.GOOS == "aix":
