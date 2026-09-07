@@ -384,13 +384,20 @@ func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc) 
 		const kandeloMaxPages = 16384 // 16384 * 64 KiB = 1 GiB
 		dataEnd := uint64(ldr.SymValue(ldr.Lookup("runtime.end", 0)))
 		initialSize := dataEnd + 1<<20 // 1 MB, for runtime init allocating a few pages
+		minPages := initialSize / wasmPageSize
+		if minPages > kandeloMaxPages {
+			// The program's static layout exceeds Kandelo's 1 GiB memory cap.
+			// Emitting min > max would produce an invalid module that only
+			// fails opaquely at instantiation, so fail loudly here instead.
+			ld.Errorf("GOOS=kandelo: initial linear memory %d pages exceeds the maximum of %d pages (1 GiB); program static data is too large", minPages, uint64(kandeloMaxPages))
+		}
 
 		writeName(ctxt.Out, "env")
 		writeName(ctxt.Out, "memory")
-		ctxt.Out.WriteByte(0x02)                          // memory import
-		ctxt.Out.WriteByte(0x03)                          // limits flags: has-max (0x01) | shared (0x02)
-		writeUleb128(ctxt.Out, initialSize/wasmPageSize)  // min (initial) pages
-		writeUleb128(ctxt.Out, kandeloMaxPages)           // max pages
+		ctxt.Out.WriteByte(0x02)                // memory import
+		ctxt.Out.WriteByte(0x03)                // limits flags: has-max (0x01) | shared (0x02)
+		writeUleb128(ctxt.Out, minPages)        // min (initial) pages
+		writeUleb128(ctxt.Out, kandeloMaxPages) // max pages
 	}
 
 	writeSecSize(ctxt, sizeOffset)
