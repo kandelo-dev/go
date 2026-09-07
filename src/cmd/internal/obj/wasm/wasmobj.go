@@ -1400,6 +1400,22 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			w.WriteByte(0x00)
 			w.WriteByte(0x00)
 
+		case AMemoryAtomicNotify, AMemoryAtomicWait32, AI32AtomicStore:
+			// memarg: uleb align (log2 of access size in bytes) then uleb
+			// offset. All three operate on a 4-byte (i32) datum, so the
+			// natural alignment is log2(4) = 2. The offset is taken from the
+			// instruction operand (TYPE_CONST), defaulting to 0 when the op
+			// is written without an operand; the address is expected to be on
+			// the wasm stack.
+			if p.From.Offset < 0 {
+				panic("negative offset for atomic op")
+			}
+			if p.From.Offset > math.MaxUint32 {
+				ctxt.Diag("bad offset in %v", p)
+			}
+			writeUleb128(w, 2)
+			writeUleb128(w, uint64(p.From.Offset))
+
 		}
 	}
 
@@ -1429,11 +1445,32 @@ func writeOpcode(w *bytes.Buffer, as obj.As) {
 		w.WriteByte(byte(as - ALocalGet + 0x20))
 	case as < AI32TruncSatF32S:
 		w.WriteByte(byte(as - AI32Load + 0x28))
-	case as < ALast:
+	case as < AMemoryAtomicNotify:
 		w.WriteByte(0xFC)
 		w.WriteByte(byte(as - AI32TruncSatF32S + 0x00))
+	case as < ALast:
+		// Atomic memory instructions (WebAssembly threads proposal).
+		// The 0xFE-prefix sub-opcodes are not contiguous, so map each
+		// explicitly.
+		w.WriteByte(0xFE)
+		w.WriteByte(atomicSubOpcode(as))
 	default:
 		panic(fmt.Sprintf("unexpected assembler op: %s", as))
+	}
+}
+
+// atomicSubOpcode returns the 0xFE-prefix sub-opcode byte for the atomic
+// memory instructions.
+func atomicSubOpcode(as obj.As) byte {
+	switch as {
+	case AMemoryAtomicNotify:
+		return 0x00
+	case AMemoryAtomicWait32:
+		return 0x01
+	case AI32AtomicStore:
+		return 0x17
+	default:
+		panic(fmt.Sprintf("atomicSubOpcode: not an atomic op: %s", as))
 	}
 }
 

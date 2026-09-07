@@ -241,6 +241,15 @@ const (
 	ATableSize
 	ATableFill
 
+	// Atomic memory instructions from the WebAssembly threads proposal.
+	// These use the 0xFE prefix. Their sub-opcodes are NOT contiguous, so
+	// writeOpcode maps each explicitly rather than by offset (unlike the
+	// 0xFC saturating/bulk-memory family above). AMemoryAtomicNotify is the
+	// first 0xFE-family op and is used as the range boundary in writeOpcode.
+	AMemoryAtomicNotify // opcode 0xFE 0x00
+	AMemoryAtomicWait32 // opcode 0xFE 0x01
+	AI32AtomicStore     // opcode 0xFE 0x17
+
 	ALast // Sentinel: End of low-level WebAssembly instructions.
 
 	ARESUMEPOINT
