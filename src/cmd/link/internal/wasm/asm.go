@@ -238,6 +238,33 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		fns[i] = &wasmFunc{Name: name, Type: typ, Code: wfn.Bytes()}
 	}
 
+	// abiVersionFuncIdx is the WebAssembly function index of the synthesized
+	// __abi_version marker export (GOOS=kandelo only). Zero when not emitted.
+	var abiVersionFuncIdx uint32
+	if buildcfg.GOOS == "kandelo" {
+		// Synthesize a raw () -> i32 function whose body reduces to
+		// `i32.const 43; end`. The Kandelo host does NOT call this export; it
+		// byte-parses the exported function body and accepts an i32.const that
+		// is returned directly (following at most one call wrapper). A normal
+		// Go wasm function carries an SP/resume prologue the parser would
+		// reject, so the body is emitted directly here.
+		//
+		// 43 is the Kandelo ABI version. It must stay in sync with ABI_VERSION
+		// in the Kandelo repository's crates/shared/src/lib.rs; hardcoded for
+		// now (milestone 1).
+		const kandeloABIVersion = 43
+		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
+		var body bytes.Buffer
+		writeUleb128(&body, 0)                     // local declaration count
+		writeI32Const(&body, kandeloABIVersion)    // i32.const 43
+		body.WriteByte(0x0b)                       // end
+		// Module function index: imported functions occupy [0, len(hostImports)),
+		// then the defined functions in fns order. This synthesized function is
+		// appended at the current end of fns.
+		abiVersionFuncIdx = uint32(len(hostImports)) + uint32(len(fns))
+		fns = append(fns, &wasmFunc{Name: "__abi_version", Type: abiType, Code: body.Bytes()})
+	}
+
 	ctxt.Out.Write([]byte{0x00, 0x61, 0x73, 0x6d}) // magic
 	ctxt.Out.Write([]byte{0x01, 0x00, 0x00, 0x00}) // version
 
@@ -247,12 +274,17 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	}
 
 	writeTypeSec(ctxt, types)
-	writeImportSec(ctxt, hostImports)
+	writeImportSec(ctxt, ldr, hostImports)
 	writeFunctionSec(ctxt, fns)
 	writeTableSec(ctxt, fns)
-	writeMemorySec(ctxt, ldr)
+	if buildcfg.GOOS != "kandelo" {
+		// GOOS=kandelo imports its linear memory from env.memory (written by
+		// writeImportSec) instead of defining a local memory, so it emits no
+		// memory section.
+		writeMemorySec(ctxt, ldr)
+	}
 	writeGlobalSec(ctxt)
-	writeExportSec(ctxt, ldr, len(hostImports))
+	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
@@ -317,10 +349,19 @@ func writeTypeSec(ctxt *ld.Link, types []*wasmFuncType) {
 
 // writeImportSec writes the section that lists the functions that get
 // imported from the WebAssembly host, usually JavaScript.
-func writeImportSec(ctxt *ld.Link, hostImports []*wasmFunc) {
+func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc) {
 	sizeOffset := writeSecHeader(ctxt, sectionImport)
 
-	writeUleb128(ctxt.Out, uint64(len(hostImports))) // number of imports
+	// GOOS=kandelo imports its (shared) linear memory from env.memory rather
+	// than defining and exporting a local memory. This memory import adds one
+	// entry to the import section but does not affect function-index space.
+	importMemory := buildcfg.GOOS == "kandelo"
+
+	numImports := uint64(len(hostImports))
+	if importMemory {
+		numImports++
+	}
+	writeUleb128(ctxt.Out, numImports) // number of imports
 	for _, fn := range hostImports {
 		if fn.Module != "" {
 			writeName(ctxt.Out, fn.Module)
@@ -330,6 +371,26 @@ func writeImportSec(ctxt *ld.Link, hostImports []*wasmFunc) {
 		writeName(ctxt.Out, fn.Name)
 		ctxt.Out.WriteByte(0x00) // func import
 		writeUleb128(ctxt.Out, uint64(fn.Type))
+	}
+
+	if importMemory {
+		// Import a SHARED linear memory from module "env", field "memory". The
+		// Kandelo host provides one shared memory that also backs the syscall
+		// channel; a guest-defined memory would be a separate address space.
+		// A shared memory must declare a maximum, which the host pins at 16384
+		// 64 KiB pages (1 GiB). The initial (min) size matches what
+		// writeMemorySec computes from the program layout.
+		const wasmPageSize = 64 << 10 // 64KB
+		const kandeloMaxPages = 16384 // 16384 * 64 KiB = 1 GiB
+		dataEnd := uint64(ldr.SymValue(ldr.Lookup("runtime.end", 0)))
+		initialSize := dataEnd + 1<<20 // 1 MB, for runtime init allocating a few pages
+
+		writeName(ctxt.Out, "env")
+		writeName(ctxt.Out, "memory")
+		ctxt.Out.WriteByte(0x02)                          // memory import
+		ctxt.Out.WriteByte(0x03)                          // limits flags: has-max (0x01) | shared (0x02)
+		writeUleb128(ctxt.Out, initialSize/wasmPageSize)  // min (initial) pages
+		writeUleb128(ctxt.Out, kandeloMaxPages)           // max pages
 	}
 
 	writeSecSize(ctxt, sizeOffset)
@@ -415,16 +476,12 @@ func writeGlobalSec(ctxt *ld.Link) {
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
 // The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
-	case "wasip1", "kandelo":
-		// kandelo currently mirrors wasip1's default module shape: the
-		// runtime entry point is exported and linear memory is exported.
-		// The Kandelo memory model (imported memory plus the __abi_version
-		// marker) is a later change; for now this produces a module with
-		// Go's default exported memory.
+	case "wasip1":
+		// wasip1 exports the runtime entry point and the linear memory.
 		writeUleb128(ctxt.Out, uint64(2+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
@@ -452,6 +509,38 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
 		writeName(ctxt.Out, "memory") // memory in wasi
 		ctxt.Out.WriteByte(0x02)      // mem export
 		writeUleb128(ctxt.Out, 0)     // memidx
+	case "kandelo":
+		// Kandelo native module shape: export the runtime entry point and the
+		// __abi_version marker. Linear memory is NOT exported here; it is
+		// imported from env.memory (see writeImportSec). The export count is
+		// entry(1) + WasmExports + __abi_version(1).
+		writeUleb128(ctxt.Out, uint64(2+len(ldr.WasmExports))) // number of exports
+		var entry, entryExpName string
+		switch ctxt.BuildMode {
+		case ld.BuildModeExe:
+			entry = "_rt0_wasm_kandelo"
+			entryExpName = "_start"
+		case ld.BuildModeCShared:
+			entry = "_rt0_wasm_kandelo_lib"
+			entryExpName = "_initialize"
+		}
+		s := ldr.Lookup(entry, 0)
+		if s == 0 {
+			ld.Errorf("export symbol %s not defined", entry)
+		}
+		idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
+		writeName(ctxt.Out, entryExpName)   // process entry point
+		ctxt.Out.WriteByte(0x00)            // func export
+		writeUleb128(ctxt.Out, uint64(idx)) // funcidx
+		for _, s := range ldr.WasmExports {
+			idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
+			writeName(ctxt.Out, ldr.SymName(s))
+			ctxt.Out.WriteByte(0x00)            // func export
+			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
+		}
+		writeName(ctxt.Out, "__abi_version")             // Kandelo ABI marker
+		ctxt.Out.WriteByte(0x00)                         // func export
+		writeUleb128(ctxt.Out, uint64(abiVersionFuncIdx)) // funcidx
 	case "js":
 		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
 		for _, name := range []string{"run", "resume", "getsp"} {
