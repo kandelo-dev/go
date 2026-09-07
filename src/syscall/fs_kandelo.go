@@ -617,7 +617,7 @@ type Stat_t struct {
 
 	Mode int
 
-	// Uid and Gid are always zero on wasip1 platforms
+	// Uid and Gid are always zero on kandelo platforms
 	Uid uint32
 	Gid uint32
 }
