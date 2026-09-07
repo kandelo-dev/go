@@ -1096,7 +1096,7 @@ func writeITab(lsym *obj.LSym, typ, iface *types.Type, allowNonImplement bool) {
 		var a rttype.ArrayCursor
 		a, delta = c.ModifyArray(len(entries))
 		for i, fn := range entries {
-			a.Elem(i).WritePtrWeak(fn) // method pointer for each method
+			a.Elem(i).WriteFuncPtrWeak(fn) // method pointer for each method
 		}
 	}
 	// Nothing writes static itabs, so they are read only.
