@@ -75,5 +75,30 @@ func walltime1() (sec int64, nsec int32) {
 //
 // STUB: no host clock backend yet; returns 0.
 func nanotime1() int64 {
-	return 0
+	// STUB: there is no host monotonic clock backend yet. We cannot return a
+	// compile-time constant here for two reasons:
+	//
+	//  1. runtime.main rejects a zero clock reading ("nanotime returning
+	//     zero") via throw, which is noreturn. If the compiler can fold this
+	//     call to the constant 0, it proves that throw is always taken and
+	//     dead-code-eliminates the remainder of runtime.main -- including the
+	//     indirect call to main.main. That silently drops the user program's
+	//     entry point from the linked module. (os_wasip1.go avoids this only
+	//     incidentally, because its nanotime1 calls the clock_time_get
+	//     wasmimport, which the compiler cannot fold.)
+	//
+	//  2. Many parts of the runtime (scheduler, GC, timers) assume a
+	//     monotonically non-decreasing clock.
+	//
+	// Until the host clock backend exists, return a monotonically increasing,
+	// always-nonzero counter. This is not a real clock; it only preserves the
+	// runtime's startup invariants and keeps nanotime opaque to the optimizer.
+	// wasm runs a single M, so a plain increment is race-free here.
+	nanotimeCounter += 1000
+	return int64(nanotimeCounter)
 }
+
+// nanotimeCounter is the backing state for the nanotime1 stub above. It is a
+// package-level variable specifically so the compiler cannot constant-fold
+// nanotime1's result; see the comment in nanotime1.
+var nanotimeCounter uint64 = 1000
