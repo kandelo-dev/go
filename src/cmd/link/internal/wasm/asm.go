@@ -69,6 +69,8 @@ var wasmFuncTypes = map[string]*wasmFuncType{
 	"_rt0_wasm_js":            {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1":        {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1_lib":    {Params: []byte{}},                                         //
+	"_rt0_wasm_kandelo":       {Params: []byte{}},                                         //
+	"_rt0_wasm_kandelo_lib":   {Params: []byte{}},                                         //
 	"wasm_export__start":      {},                                                         //
 	"wasm_export_run":         {Params: []byte{I32, I32}},                                 // argc, argv
 	"wasm_export_resume":      {Params: []byte{}},                                         //
@@ -417,15 +419,20 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
-	case "wasip1":
+	case "wasip1", "kandelo":
+		// kandelo currently mirrors wasip1's default module shape: the
+		// runtime entry point is exported and linear memory is exported.
+		// The Kandelo memory model (imported memory plus the __abi_version
+		// marker) is a later change; for now this produces a module with
+		// Go's default exported memory.
 		writeUleb128(ctxt.Out, uint64(2+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
-			entry = "_rt0_wasm_wasip1"
+			entry = "_rt0_wasm_" + buildcfg.GOOS
 			entryExpName = "_start"
 		case ld.BuildModeCShared:
-			entry = "_rt0_wasm_wasip1_lib"
+			entry = "_rt0_wasm_" + buildcfg.GOOS + "_lib"
 			entryExpName = "_initialize"
 		}
 		s := ldr.Lookup(entry, 0)

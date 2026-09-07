@@ -47,6 +47,7 @@ const (
 	Hplan9
 	Hsolaris
 	Hwasip1
+	Hkandelo
 	Hwindows
 	Haix
 )
@@ -75,6 +76,8 @@ func (h *HeadType) Set(s string) error {
 		*h = Hsolaris
 	case "wasip1":
 		*h = Hwasip1
+	case "kandelo":
+		*h = Hkandelo
 	case "windows":
 		*h = Hwindows
 	default:
@@ -107,6 +110,8 @@ func (h HeadType) String() string {
 		return "solaris"
 	case Hwasip1:
 		return "wasip1"
+	case Hkandelo:
+		return "kandelo"
 	case Hwindows:
 		return "windows"
 	}

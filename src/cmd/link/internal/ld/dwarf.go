@@ -1825,7 +1825,7 @@ func dwarfEnabled(ctxt *Link) bool {
 	if *FlagW { // disable dwarf
 		return false
 	}
-	if ctxt.HeadType == objabi.Hplan9 || ctxt.HeadType == objabi.Hjs || ctxt.HeadType == objabi.Hwasip1 {
+	if ctxt.HeadType == objabi.Hplan9 || ctxt.HeadType == objabi.Hjs || ctxt.HeadType == objabi.Hwasip1 || ctxt.HeadType == objabi.Hkandelo {
 		return false
 	}
 

@@ -15,6 +15,7 @@ const IsHurd = 0
 const IsIllumos = 1
 const IsIos = 0
 const IsJs = 0
+const IsKandelo = 0
 const IsLinux = 0
 const IsNacl = 0
 const IsNetbsd = 0
