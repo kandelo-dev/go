@@ -501,8 +501,8 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 			// to the start of the first text section, even if there are multiple.
 			if sect.Name == ".text" {
 				o = ldr.SymValue(rs) - int64(Segtext.Sections[0].Vaddr) + r.Add()
-				if target.IsWasm() {
-					// On Wasm, textoff (e.g. in the method table) is just the function index,
+				if target.IsWasm() && target.Arch.PtrSize == 8 {
+					// On GOARCH=wasm, textoff (e.g. in the method table) is just the function index,
 					// whereas the "PC" (rs's Value), relative to section start, is
 					// function index << 16 + block index (see ../wasm/asm.go:assignAddress).
 					if o&(1<<16-1) != 0 {
@@ -3020,12 +3020,17 @@ func (ctxt *Link) address() []*sym.Segment {
 		s.Vaddr = va
 		va += s.Length
 		if ctxt.IsWasm() && i == 0 {
-			// On Wasm, functions are not in the linear memory.
-			// Start the data address at wasmMinDataAddr.
+			// On GOARCH=wasm, functions are not in linear memory, so reset the
+			// data address. wasm32 assigns dense logical PC tokens, so place
+			// data after the token range instead.
 			// (The second and later sections in Segtext are
 			// actually rodata. Probably we should put them in
 			// Segrodata.)
-			va = wasmMinDataAddr
+			if ctxt.Arch.PtrSize == 8 {
+				va = wasmMinDataAddr
+			} else if va < wasmMinDataAddr {
+				va = wasmMinDataAddr
+			}
 		}
 	}
 	Segtext.Length = va - uint64(*FlagTextAddr)
