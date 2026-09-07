@@ -2724,7 +2724,7 @@ func externalLinkingReason(s *modload.Loader, p *Package) (what string) {
 	// Some build modes always require external linking.
 	switch cfg.BuildBuildmode {
 	case "c-shared":
-		if cfg.BuildContext.GOARCH == "wasm" {
+		if cfg.BuildContext.GOARCH == "wasm" || cfg.BuildContext.GOARCH == "wasm32" {
 			break
 		}
 		fallthrough

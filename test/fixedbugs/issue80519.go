@@ -121,7 +121,7 @@ func main() {
 		panic("range clear target changed through unsafe pointer field")
 	}
 
-	if runtime.GOARCH != "wasm" {
+	if runtime.GOARCH != "wasm" && runtime.GOARCH != "wasm32" {
 		panicked = false
 		func() {
 			defer func() {

@@ -119,7 +119,7 @@ var results = [...]int{
 
 func main() {
 	max := 9
-	if runtime.GOARCH == "wasm" {
+	if runtime.GOARCH == "wasm" || runtime.GOARCH == "wasm32" {
 		max = 7 // stack size is limited
 	}
 	for i := 0; i <= max; i++ {

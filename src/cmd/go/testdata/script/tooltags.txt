@@ -75,6 +75,11 @@ env GOWASM=satconv
 go list -f '{{context.ToolTags}}'
 stdout 'wasm.satconv'
 
+env GOARCH=wasm32
+env GOWASM=signext
+go list -f '{{context.ToolTags}}'
+stdout 'wasm32.signext'
+
 -- go.mod --
 module m
 

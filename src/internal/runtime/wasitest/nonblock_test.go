@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // Not all systems have syscall.Mkfifo.
-//go:build !aix && !plan9 && !solaris && !wasm && !windows
+//go:build !aix && !plan9 && !solaris && !wasm && !wasm32 && !windows
 
 package wasi_test
 
@@ -33,7 +33,8 @@ type fifo struct {
 }
 
 func TestNonblock(t *testing.T) {
-	if target != "wasip1/wasm" {
+	arch, ok := targetArch()
+	if !ok {
 		t.Skip()
 	}
 
@@ -67,7 +68,7 @@ func TestNonblock(t *testing.T) {
 
 			subProcess := exec.Command(testenv.GoToolPath(t), args...)
 
-			subProcess.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+			subProcess.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH="+arch)
 
 			pr, pw := io.Pipe()
 			defer pw.Close()

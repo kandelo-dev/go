@@ -83,6 +83,7 @@ var okgoarch = []string{
 	"s390x",
 	"sparc64",
 	"wasm",
+	"wasm32",
 }
 
 // The known operating systems.
@@ -1317,6 +1318,7 @@ var cgoEnabled = map[string]bool{
 	"ios/amd64":       true,
 	"js/wasm":         false,
 	"wasip1/wasm":     false,
+	"wasip1/wasm32":   false,
 	"netbsd/386":      true,
 	"netbsd/amd64":    true,
 	"netbsd/arm":      true,

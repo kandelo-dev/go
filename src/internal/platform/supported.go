@@ -64,7 +64,7 @@ func ASanSupported(goos, goarch string) bool {
 func FIPS140Supported(goos, goarch string) bool {
 	// Keep this in sync with crypto/internal/fips140.Supported.
 	switch {
-	case goarch == "wasm",
+	case goarch == "wasm", goarch == "wasm32",
 		goos == "windows" && goarch == "386",
 		goos == "openbsd",
 		goos == "aix":
@@ -183,7 +183,7 @@ func BuildModeSupported(compiler, buildmode, goos, goarch string) bool {
 			"freebsd/amd64",
 			"darwin/amd64", "darwin/arm64",
 			"windows/amd64", "windows/386", "windows/arm64",
-			"wasip1/wasm":
+			"wasip1/wasm", "wasip1/wasm32":
 			return true
 		}
 		return false

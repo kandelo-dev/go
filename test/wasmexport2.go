@@ -7,7 +7,7 @@
 // Verify that wasmexport supports allowed types and rejects
 // unallowed types.
 
-//go:build wasm
+//go:build wasm || wasm32
 
 package p
 

@@ -6,7 +6,7 @@
 
 // Verify that misplaced directives are diagnosed.
 
-//go:build wasm
+//go:build wasm || wasm32
 
 package p
 

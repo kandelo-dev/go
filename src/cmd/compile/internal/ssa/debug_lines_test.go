@@ -200,6 +200,8 @@ func compileAndDump(t *testing.T, file, function, moreGCFlags string) []byte {
 	testGoos := "linux" // default to linux
 	if testGoArch() == "wasm" {
 		testGoos = "js"
+	} else if testGoArch() == "wasm32" {
+		testGoos = "wasip1"
 	}
 	cmd.Env = replaceEnv(cmd.Env, "GOOS", testGoos)
 	cmd.Env = replaceEnv(cmd.Env, "GOARCH", testGoArch())

@@ -280,7 +280,7 @@ func (t test) expectFail() bool {
 	// Note: gccgo supports more 32-bit architectures than this, but
 	// hopefully the 32-bit failures are fixed before this matters.
 	switch goarch {
-	case "386", "arm", "mips", "mipsle":
+	case "386", "arm", "mips", "mipsle", "wasm32":
 		failureSets = append(failureSets, types2Failures32Bit)
 	}
 
@@ -1543,6 +1543,7 @@ var (
 		"ppc64x":  {}, // A pseudo-arch representing both ppc64 and ppc64le
 		"s390x":   {},
 		"wasm":    {},
+		"wasm32":  {},
 		"riscv64": {"GORISCV64", "rva20u64", "rva22u64", "rva23u64"},
 	}
 )
@@ -1630,6 +1631,8 @@ func (t test) wantedAsmOpcodes(fn string) asmChecks {
 				os, arch, subarch = "linux", archspec[0], ""
 				if arch == "wasm" {
 					os = "js"
+				} else if arch == "wasm32" {
+					os = "wasip1"
 				}
 			}
 

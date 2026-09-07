@@ -518,6 +518,17 @@ func SliceAndIndex(a []int, b int) int {
 	return a[b:][b]
 }
 
+// 64-bit indices on wasm32 use the backend panic path.
+func IndexInt64(s []byte, i int64) byte {
+	// wasm32:`Call runtime\.panicExtend\(SB\)` -`Call runtime\.goPanicExtend`
+	return s[i]
+}
+
+func IndexUint64(s []byte, i uint64) byte {
+	// wasm32:`Call runtime\.panicExtend\(SB\)` -`Call runtime\.goPanicExtend`
+	return s[i]
+}
+
 // --------------------------------------- //
 //   Code generation for unsafe.Slice      //
 // --------------------------------------- //

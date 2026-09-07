@@ -6,6 +6,6 @@
 
 // This test checks the memory size of a small wasm program.
 
-//go:build wasm
+//go:build wasm || wasm32
 
 package ignored

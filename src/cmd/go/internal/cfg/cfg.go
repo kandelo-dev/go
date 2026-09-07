@@ -531,7 +531,7 @@ func GetArchEnv() (key, val string, changed bool) {
 		return "GOPPC64", GOPPC64, goPPC64Changed
 	case "riscv64":
 		return "GORISCV64", GORISCV64, goRISCV64Changed
-	case "wasm":
+	case "wasm", "wasm32":
 		return "GOWASM", GOWASM, goWASMChanged
 	}
 	return "", "", false

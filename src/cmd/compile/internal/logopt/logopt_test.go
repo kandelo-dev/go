@@ -147,7 +147,7 @@ func s15a8(x *[15]int64) [15]int64 {
 		arches := []string{runtime.GOARCH}
 		goos0 := runtime.GOOS
 		if runtime.GOARCH == "amd64" { // Test many things with "linux" (wasm will get "js")
-			arches = []string{"arm", "arm64", "386", "amd64", "mips", "mips64", "loong64", "ppc64le", "riscv64", "s390x", "wasm"}
+			arches = []string{"arm", "arm64", "386", "amd64", "mips", "mips64", "loong64", "ppc64le", "riscv64", "s390x", "wasm", "wasm32"}
 			goos0 = "linux"
 		}
 
@@ -156,6 +156,8 @@ func s15a8(x *[15]int64) [15]int64 {
 				goos := goos0
 				if arch == "wasm" {
 					goos = "js"
+				} else if arch == "wasm32" {
+					goos = "wasip1"
 				}
 				_, err := testCopy(t, dir, arch, goos, copy, outcopy)
 				if err != nil {

@@ -319,7 +319,7 @@ the function is accessed from outside the package.
 
 	//go:wasmimport importmodule importname
 
-The //go:wasmimport directive is wasm-only and must be followed by a
+The //go:wasmimport directive is WebAssembly-only and must be followed by a
 function declaration with no body.
 It specifies that the function is provided by a wasm module identified
 by ``importmodule'' and ``importname''. For example,
@@ -331,7 +331,7 @@ causes g to refer to the WebAssembly function f from module a_module.
 
 	//go:wasmexport exportname
 
-The //go:wasmexport directive is wasm-only and must be followed by a
+The //go:wasmexport directive is WebAssembly-only and must be followed by a
 function definition.
 It specifies that the function is exported to the wasm host as ``exportname''.
 For example,
@@ -362,5 +362,9 @@ int32, uint32, int64, uint64, float32, float64, an array whose element type is
 a permitted pointer element type, or a struct, which, if non-empty, embeds
 [structs.HostLayout], and contains only fields whose types are permitted pointer
 element types.
+
+On GOARCH=wasm32, a permitted pointer element may itself be a pointer or
+unsafe.Pointer because Go and the WebAssembly host use the same 32-bit pointer
+width. These nested pointer element types remain disallowed on GOARCH=wasm.
 */
 package main

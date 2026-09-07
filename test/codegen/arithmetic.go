@@ -421,6 +421,12 @@ func ConstDivs(n1 uint, n2 int) (uint, int) {
 	return a, b
 }
 
+func ConstDiv7(n uint32) uint32 {
+	// wasm:1`I64Mul` -`I64DivU`
+	// wasm32:1`I64Mul` -`I64DivU`
+	return n / 7
+}
+
 func FloatDivs(a []float32) float32 {
 	// amd64:`DIVSS 8\([A-Z]+\), X[0-9]+`
 	// 386/sse2:`DIVSS 8\([A-Z]+\), X[0-9]+`
