@@ -24,6 +24,7 @@ var KnownOS = map[string]bool{
 	"illumos":   true,
 	"ios":       true,
 	"js":        true,
+	"kandelo":   true,
 	"linux":     true,
 	"nacl":      true,
 	"netbsd":    true,
