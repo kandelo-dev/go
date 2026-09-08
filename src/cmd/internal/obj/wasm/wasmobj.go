@@ -1400,21 +1400,32 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			w.WriteByte(0x00)
 			w.WriteByte(0x00)
 
-		case AMemoryAtomicNotify, AMemoryAtomicWait32, AI32AtomicStore:
+		case AMemoryAtomicNotify, AMemoryAtomicWait32,
+			AI32AtomicLoad, AI64AtomicLoad, AI32AtomicLoad8U,
+			AI32AtomicStore, AI64AtomicStore, AI32AtomicStore8,
+			AI32AtomicRmwAdd, AI64AtomicRmwAdd,
+			AI32AtomicRmwAnd, AI32AtomicRmw8AndU,
+			AI32AtomicRmwOr, AI32AtomicRmw8OrU,
+			AI32AtomicRmwXchg, AI64AtomicRmwXchg,
+			AI32AtomicRmwCmpxchg, AI64AtomicRmwCmpxchg:
 			// memarg: uleb align (log2 of access size in bytes) then uleb
-			// offset. All three operate on a 4-byte (i32) datum, so the
-			// natural alignment is log2(4) = 2. The offset is taken from the
-			// instruction operand (TYPE_CONST), defaulting to 0 when the op
-			// is written without an operand; the address is expected to be on
-			// the wasm stack.
+			// offset. The alignment is the datum's natural alignment (see
+			// align); the offset is taken from the instruction operand
+			// (TYPE_CONST), defaulting to 0 when the op is written without an
+			// operand. The address is expected to be on the wasm stack.
 			if p.From.Offset < 0 {
 				panic("negative offset for atomic op")
 			}
 			if p.From.Offset > math.MaxUint32 {
 				ctxt.Diag("bad offset in %v", p)
 			}
-			writeUleb128(w, 2)
+			writeUleb128(w, align(p.As))
 			writeUleb128(w, uint64(p.From.Offset))
+
+		case AAtomicFence:
+			// atomic.fence takes a single reserved immediate byte, not a
+			// memarg. Encoded as 0xFE 0x03 0x00.
+			w.WriteByte(0x00)
 
 		}
 	}
@@ -1467,8 +1478,40 @@ func atomicSubOpcode(as obj.As) byte {
 		return 0x00
 	case AMemoryAtomicWait32:
 		return 0x01
+	case AAtomicFence:
+		return 0x03
+	case AI32AtomicLoad:
+		return 0x10
+	case AI64AtomicLoad:
+		return 0x11
+	case AI32AtomicLoad8U:
+		return 0x12
 	case AI32AtomicStore:
 		return 0x17
+	case AI64AtomicStore:
+		return 0x18
+	case AI32AtomicStore8:
+		return 0x19
+	case AI32AtomicRmwAdd:
+		return 0x1E
+	case AI64AtomicRmwAdd:
+		return 0x1F
+	case AI32AtomicRmwAnd:
+		return 0x2C
+	case AI32AtomicRmw8AndU:
+		return 0x2E
+	case AI32AtomicRmwOr:
+		return 0x33
+	case AI32AtomicRmw8OrU:
+		return 0x35
+	case AI32AtomicRmwXchg:
+		return 0x41
+	case AI64AtomicRmwXchg:
+		return 0x42
+	case AI32AtomicRmwCmpxchg:
+		return 0x48
+	case AI64AtomicRmwCmpxchg:
+		return 0x49
 	default:
 		panic(fmt.Sprintf("atomicSubOpcode: not an atomic op: %s", as))
 	}
@@ -1500,13 +1543,20 @@ func regType(reg int16) valueType {
 
 func align(as obj.As) uint64 {
 	switch as {
-	case AI32Load8S, AI32Load8U, AI64Load8S, AI64Load8U, AI32Store8, AI64Store8:
+	case AI32Load8S, AI32Load8U, AI64Load8S, AI64Load8U, AI32Store8, AI64Store8,
+		AI32AtomicLoad8U, AI32AtomicStore8, AI32AtomicRmw8AndU, AI32AtomicRmw8OrU:
 		return 0
 	case AI32Load16S, AI32Load16U, AI64Load16S, AI64Load16U, AI32Store16, AI64Store16:
 		return 1
-	case AI32Load, AF32Load, AI64Load32S, AI64Load32U, AI32Store, AF32Store, AI64Store32:
+	case AI32Load, AF32Load, AI64Load32S, AI64Load32U, AI32Store, AF32Store, AI64Store32,
+		AMemoryAtomicNotify, AMemoryAtomicWait32,
+		AI32AtomicLoad, AI32AtomicStore,
+		AI32AtomicRmwAdd, AI32AtomicRmwAnd, AI32AtomicRmwOr,
+		AI32AtomicRmwXchg, AI32AtomicRmwCmpxchg:
 		return 2
-	case AI64Load, AF64Load, AI64Store, AF64Store:
+	case AI64Load, AF64Load, AI64Store, AF64Store,
+		AI64AtomicLoad, AI64AtomicStore,
+		AI64AtomicRmwAdd, AI64AtomicRmwXchg, AI64AtomicRmwCmpxchg:
 		return 3
 	default:
 		panic("align: bad op")

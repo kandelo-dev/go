@@ -2,6 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build wasm && !kandelo
+
+// This is the plain (non-atomic) memory-access implementation shared by the
+// js and wasip1 wasm ports, which run on NON-shared linear memory where the
+// real atomic opcodes (and atomic.wait) can trap. The kandelo port runs on
+// shared memory and provides real atomic operations in atomic_kandelo.{go,s}.
+//
 // TODO(neelance): implement with actual atomic operations as soon as threads are available
 // See https://github.com/WebAssembly/design/issues/1073
 

@@ -248,7 +248,23 @@ const (
 	// first 0xFE-family op and is used as the range boundary in writeOpcode.
 	AMemoryAtomicNotify // opcode 0xFE 0x00
 	AMemoryAtomicWait32 // opcode 0xFE 0x01
+	AAtomicFence        // opcode 0xFE 0x03 (immediate 0x00, no memarg)
+	AI32AtomicLoad      // opcode 0xFE 0x10
+	AI64AtomicLoad      // opcode 0xFE 0x11
+	AI32AtomicLoad8U    // opcode 0xFE 0x12
 	AI32AtomicStore     // opcode 0xFE 0x17
+	AI64AtomicStore     // opcode 0xFE 0x18
+	AI32AtomicStore8    // opcode 0xFE 0x19
+	AI32AtomicRmwAdd    // opcode 0xFE 0x1E (i32.atomic.rmw.add)
+	AI64AtomicRmwAdd    // opcode 0xFE 0x1F (i64.atomic.rmw.add)
+	AI32AtomicRmwAnd    // opcode 0xFE 0x2C (i32.atomic.rmw.and)
+	AI32AtomicRmw8AndU  // opcode 0xFE 0x2E (i32.atomic.rmw8.and_u)
+	AI32AtomicRmwOr     // opcode 0xFE 0x33 (i32.atomic.rmw.or)
+	AI32AtomicRmw8OrU   // opcode 0xFE 0x35 (i32.atomic.rmw8.or_u)
+	AI32AtomicRmwXchg   // opcode 0xFE 0x41 (i32.atomic.rmw.xchg)
+	AI64AtomicRmwXchg   // opcode 0xFE 0x42 (i64.atomic.rmw.xchg)
+	AI32AtomicRmwCmpxchg // opcode 0xFE 0x48 (i32.atomic.rmw.cmpxchg)
+	AI64AtomicRmwCmpxchg // opcode 0xFE 0x49 (i64.atomic.rmw.cmpxchg)
 
 	ALast // Sentinel: End of low-level WebAssembly instructions.
 
