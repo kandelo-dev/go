@@ -140,3 +140,41 @@ func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno in
 // clock_gettime: tv_sec then tv_nsec, both 64-bit. It is package-level so its
 // address is stable across the synchronous syscall (no stack-copy hazard).
 var kandeloTimespec [2]int64
+
+// kandeloStartHeapAboveChannel moves the runtime's break to the top of the
+// initial linear memory the Kandelo host committed, so the Go heap grows
+// strictly above the per-process syscall channel region.
+//
+// The problem it solves: Go's wasm allocator (mem_sbrk.go) treats
+// [firstmoduledata.end, currentMemory) as heap it may hand out directly, and
+// grows past currentMemory with growMemory. The host, however, reserves the
+// syscall channel region inside that initial linear memory (just above the
+// guest's __heap_base). Without this adjustment the runtime would allocate
+// straight across the channel pages and silently corrupt the syscall channel
+// once the live heap grew past them.
+//
+// osinit records currentMemory in blocMax before calling this. Because the host
+// guarantees the entire per-process control region -- the channel included --
+// lies within that initial linear memory, starting the break at blocMax leaves
+// every channel page below the heap. Subsequent heap pages come from sbrk /
+// growMemory strictly above it. The only memory forfeited is
+// [firstmoduledata.end, channel_top): the module's own ~1 MiB linker init
+// headroom plus the channel's few pages, not a large fixed reservation.
+//
+// The guest deliberately does not model the host's internal control-region
+// layout (scratch page, per-thread slots): it only relies on the published
+// invariant that everything the host reserved is within the initial memory.
+//
+// kandeloChannelBase is nonzero only when a Kandelo host provisioned the
+// channel; guarding on it keeps this a no-op if the runtime ever links without
+// that host contract in place.
+//
+//go:nosplit
+func kandeloStartHeapAboveChannel() {
+	if kandeloChannelBase == 0 {
+		return
+	}
+	if bloc < blocMax {
+		bloc = blocMax
+	}
+}

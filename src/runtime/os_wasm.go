@@ -14,6 +14,11 @@ func osinit() {
 	physPageSize = 64 * 1024
 	initBloc()
 	blocMax = uintptr(currentMemory()) * physPageSize // record the initial linear memory size
+	// On GOOS=kandelo the host reserves the per-process syscall channel region
+	// inside this initial linear memory, so the heap must start above it rather
+	// than treating [firstmoduledata.end, blocMax) as free. No-op on other wasm
+	// GOOSes. See kandeloStartHeapAboveChannel.
+	kandeloStartHeapAboveChannel()
 	numCPUStartup = getCPUCount()
 	getg().m.procid = 2
 }

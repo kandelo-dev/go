@@ -476,7 +476,9 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 	numGlobals := len(globalRegs)
 	kandelo := buildcfg.GOOS == "kandelo"
 	if kandelo {
-		numGlobals++
+		// Two synthesized globals: __tls_base (channel-base receiver, index 8)
+		// and __heap_base (static-data end, index 9). See below.
+		numGlobals += 2
 	}
 
 	writeUleb128(ctxt.Out, uint64(numGlobals)) // number of globals
@@ -505,6 +507,23 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 		ctxt.Out.WriteByte(I32)               // __tls_base type: i32 (address)
 		ctxt.Out.WriteByte(0x00)              // immutable (const)
 		writeI32Const(ctxt.Out, int32(addr))
+		ctxt.Out.WriteByte(0x0b) // end
+
+		// __heap_base (global index 9): an immutable i32 whose value is the end
+		// of the module's static data (runtime.end, the same address initBloc
+		// uses for the initial break). The Kandelo host reads this exported
+		// global (see extractHeapBase in host/src/constants.ts) to place the
+		// per-process syscall channel region just above the guest's static data
+		// instead of at its fixed 16 MiB fallback. Combined with the runtime
+		// starting the Go heap above the channel (see kandeloStartHeapAboveChannel
+		// in channel_kandelo.go), this bounds the memory reserved below the heap
+		// to roughly the module's own 1 MiB init headroom rather than ~14 MiB.
+		// Every C/musl module already exports __heap_base; this makes Go modules
+		// match that native-module shape.
+		dataEnd := int32(ldr.SymValue(ldr.Lookup("runtime.end", 0)))
+		ctxt.Out.WriteByte(I32)   // __heap_base type: i32 (address)
+		ctxt.Out.WriteByte(0x00)  // immutable (const)
+		writeI32Const(ctxt.Out, dataEnd)
 		ctxt.Out.WriteByte(0x0b) // end
 	}
 
@@ -549,11 +568,12 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeUleb128(ctxt.Out, 0)     // memidx
 	case "kandelo":
 		// Kandelo native module shape: export the runtime entry point, the
-		// __abi_version marker, and the __tls_base global (channel-base
-		// receiver). Linear memory is NOT exported here; it is imported from
-		// env.memory (see writeImportSec). The export count is
-		// entry(1) + WasmExports + __abi_version(1) + __tls_base(1).
-		writeUleb128(ctxt.Out, uint64(3+len(ldr.WasmExports))) // number of exports
+		// __abi_version marker, the __tls_base global (channel-base receiver),
+		// and the __heap_base global (static-data end). Linear memory is NOT
+		// exported here; it is imported from env.memory (see writeImportSec).
+		// The export count is entry(1) + WasmExports + __abi_version(1) +
+		// __tls_base(1) + __heap_base(1).
+		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
@@ -587,6 +607,12 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__tls_base") // channel-base receiver
 		ctxt.Out.WriteByte(0x03)          // global export
 		writeUleb128(ctxt.Out, uint64(kandeloTLSBaseGlobalIdx))
+		// __heap_base global (index 9): static-data end the host uses to place
+		// the syscall channel just above the guest data (see writeGlobalSec).
+		const kandeloHeapBaseGlobalIdx = 9
+		writeName(ctxt.Out, "__heap_base") // static-data end (channel placement)
+		ctxt.Out.WriteByte(0x03)           // global export
+		writeUleb128(ctxt.Out, uint64(kandeloHeapBaseGlobalIdx))
 	case "js":
 		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
 		for _, name := range []string{"run", "resume", "getsp"} {
