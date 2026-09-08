@@ -8,168 +8,178 @@ package syscall
 
 import "runtime"
 
-// TODO: Auto-generate some day. (Hard-coded in binaries so not likely to change.)
+// GOOS=kandelo speaks the kernel's Linux/musl errno numbering: the syscall
+// channel returns the same errno values musl's generic bits/errno.h uses (see
+// libc/musl/arch/generic/bits/errno.h in the Kandelo repository), so these
+// constants mirror those numbers exactly. That lets the channel's errno slot
+// pass through as a syscall.Errno without translation. Earlier milestone-1
+// code used WASI's errno numbering, which does not match what the Kandelo
+// kernel emits.
 const (
-	E2BIG           Errno = 1
-	EACCES          Errno = 2
-	EADDRINUSE      Errno = 3
-	EADDRNOTAVAIL   Errno = 4
-	EAFNOSUPPORT    Errno = 5
-	EAGAIN          Errno = 6
-	EALREADY        Errno = 7
-	EBADF           Errno = 8
-	EBADMSG         Errno = 9
-	EBUSY           Errno = 10
-	ECANCELED       Errno = 11
-	ECHILD          Errno = 12
-	ECONNABORTED    Errno = 13
-	ECONNREFUSED    Errno = 14
-	ECONNRESET      Errno = 15
-	EDEADLK         Errno = 16
-	EDESTADDRREQ    Errno = 17
-	EDOM            Errno = 18
-	EDQUOT          Errno = 19
-	EEXIST          Errno = 20
-	EFAULT          Errno = 21
-	EFBIG           Errno = 22
-	EHOSTUNREACH    Errno = 23
-	EIDRM           Errno = 24
-	EILSEQ          Errno = 25
-	EINPROGRESS     Errno = 26
-	EINTR           Errno = 27
-	EINVAL          Errno = 28
-	EIO             Errno = 29
-	EISCONN         Errno = 30
-	EISDIR          Errno = 31
-	ELOOP           Errno = 32
-	EMFILE          Errno = 33
-	EMLINK          Errno = 34
-	EMSGSIZE        Errno = 35
-	EMULTIHOP       Errno = 36
-	ENAMETOOLONG    Errno = 37
-	ENETDOWN        Errno = 38
-	ENETRESET       Errno = 39
-	ENETUNREACH     Errno = 40
-	ENFILE          Errno = 41
-	ENOBUFS         Errno = 42
-	ENODEV          Errno = 43
-	ENOENT          Errno = 44
-	ENOEXEC         Errno = 45
-	ENOLCK          Errno = 46
-	ENOLINK         Errno = 47
-	ENOMEM          Errno = 48
-	ENOMSG          Errno = 49
-	ENOPROTOOPT     Errno = 50
-	ENOSPC          Errno = 51
-	ENOSYS          Errno = 52
-	ENOTCONN        Errno = 53
-	ENOTDIR         Errno = 54
-	ENOTEMPTY       Errno = 55
-	ENOTRECOVERABLE Errno = 56
-	ENOTSOCK        Errno = 57
-	ENOTSUP         Errno = 58
-	ENOTTY          Errno = 59
-	ENXIO           Errno = 60
-	EOVERFLOW       Errno = 61
-	EOWNERDEAD      Errno = 62
-	EPERM           Errno = 63
-	EPIPE           Errno = 64
-	EPROTO          Errno = 65
-	EPROTONOSUPPORT Errno = 66
-	EPROTOTYPE      Errno = 67
-	ERANGE          Errno = 68
-	EROFS           Errno = 69
-	ESPIPE          Errno = 70
-	ESRCH           Errno = 71
-	ESTALE          Errno = 72
-	ETIMEDOUT       Errno = 73
-	ETXTBSY         Errno = 74
-	EXDEV           Errno = 75
-	ENOTCAPABLE     Errno = 76
+	EPERM           Errno = 1
+	ENOENT          Errno = 2
+	ESRCH           Errno = 3
+	EINTR           Errno = 4
+	EIO             Errno = 5
+	ENXIO           Errno = 6
+	E2BIG           Errno = 7
+	ENOEXEC         Errno = 8
+	EBADF           Errno = 9
+	ECHILD          Errno = 10
+	EAGAIN          Errno = 11
+	ENOMEM          Errno = 12
+	EACCES          Errno = 13
+	EFAULT          Errno = 14
+	EBUSY           Errno = 16
+	EEXIST          Errno = 17
+	EXDEV           Errno = 18
+	ENODEV          Errno = 19
+	ENOTDIR         Errno = 20
+	EISDIR          Errno = 21
+	EINVAL          Errno = 22
+	ENFILE          Errno = 23
+	EMFILE          Errno = 24
+	ENOTTY          Errno = 25
+	ETXTBSY         Errno = 26
+	EFBIG           Errno = 27
+	ENOSPC          Errno = 28
+	ESPIPE          Errno = 29
+	EROFS           Errno = 30
+	EMLINK          Errno = 31
+	EPIPE           Errno = 32
+	EDOM            Errno = 33
+	ERANGE          Errno = 34
+	EDEADLK         Errno = 35
+	ENAMETOOLONG    Errno = 36
+	ENOLCK          Errno = 37
+	ENOSYS          Errno = 38
+	ENOTEMPTY       Errno = 39
+	ELOOP           Errno = 40
+	ENOMSG          Errno = 42
+	EIDRM           Errno = 43
+	ENOLINK         Errno = 67
+	EPROTO          Errno = 71
+	EMULTIHOP       Errno = 72
+	EBADMSG         Errno = 74
+	EOVERFLOW       Errno = 75
 	EBADFD          Errno = 77
-	// needed by src/net/error_unix_test.go
-	EOPNOTSUPP = ENOTSUP
+	EILSEQ          Errno = 84
+	ENOTSOCK        Errno = 88
+	EDESTADDRREQ    Errno = 89
+	EMSGSIZE        Errno = 90
+	EPROTOTYPE      Errno = 91
+	ENOPROTOOPT     Errno = 92
+	EPROTONOSUPPORT Errno = 93
+	EOPNOTSUPP      Errno = 95
+	ENOTSUP         Errno = EOPNOTSUPP
+	EAFNOSUPPORT    Errno = 97
+	EADDRINUSE      Errno = 98
+	EADDRNOTAVAIL   Errno = 99
+	ENETDOWN        Errno = 100
+	ENETUNREACH     Errno = 101
+	ENETRESET       Errno = 102
+	ECONNABORTED    Errno = 103
+	ECONNRESET      Errno = 104
+	ENOBUFS         Errno = 105
+	EISCONN         Errno = 106
+	ENOTCONN        Errno = 107
+	ETIMEDOUT       Errno = 110
+	ECONNREFUSED    Errno = 111
+	EHOSTUNREACH    Errno = 113
+	EALREADY        Errno = 114
+	EINPROGRESS     Errno = 115
+	ESTALE          Errno = 116
+	EDQUOT          Errno = 122
+	ECANCELED       Errno = 125
+	EOWNERDEAD      Errno = 130
+	ENOTRECOVERABLE Errno = 131
+
+	EWOULDBLOCK Errno = EAGAIN
+
+	// ENOTCAPABLE is a WASI concept with no Linux/musl equivalent. It is not
+	// emitted by the Kandelo kernel; it is defined only so code shared with the
+	// wasip1 port still compiles. Use a sentinel outside the errno range.
+	ENOTCAPABLE Errno = 0x7fff
 )
 
-// TODO: Auto-generate some day. (Hard-coded in binaries so not likely to change.)
+// errorstr is indexed by Errno; it uses the Linux/musl numbering above.
 var errorstr = [...]string{
+	EPERM:           "Operation not permitted",
+	ENOENT:          "No such file or directory",
+	ESRCH:           "No such process",
+	EINTR:           "Interrupted system call",
+	EIO:             "I/O error",
+	ENXIO:           "No such device or address",
 	E2BIG:           "Argument list too long",
+	ENOEXEC:         "Exec format error",
+	EBADF:           "Bad file number",
+	ECHILD:          "No child processes",
+	EAGAIN:          "Try again",
+	ENOMEM:          "Out of memory",
 	EACCES:          "Permission denied",
+	EFAULT:          "Bad address",
+	EBUSY:           "Device or resource busy",
+	EEXIST:          "File exists",
+	EXDEV:           "Cross-device link",
+	ENODEV:          "No such device",
+	ENOTDIR:         "Not a directory",
+	EISDIR:          "Is a directory",
+	EINVAL:          "Invalid argument",
+	ENFILE:          "File table overflow",
+	EMFILE:          "Too many open files",
+	ENOTTY:          "Not a typewriter",
+	ETXTBSY:         "Text file busy",
+	EFBIG:           "File too large",
+	ENOSPC:          "No space left on device",
+	ESPIPE:          "Illegal seek",
+	EROFS:           "Read-only file system",
+	EMLINK:          "Too many links",
+	EPIPE:           "Broken pipe",
+	EDOM:            "Math arg out of domain of func",
+	ERANGE:          "Math result not representable",
+	EDEADLK:         "Deadlock condition",
+	ENAMETOOLONG:    "File name too long",
+	ENOLCK:          "No record locks available",
+	ENOSYS:          "Not implemented on " + runtime.GOOS,
+	ENOTEMPTY:       "Directory not empty",
+	ELOOP:           "Too many symbolic links",
+	ENOMSG:          "No message of desired type",
+	EIDRM:           "Identifier removed",
+	ENOLINK:         "The link has been severed",
+	EPROTO:          "Protocol error",
+	EMULTIHOP:       "Multihop attempted",
+	EBADMSG:         "Trying to read unreadable message",
+	EOVERFLOW:       "Value too large for defined data type",
+	EBADFD:          "file descriptor in bad state",
+	EILSEQ:          "EILSEQ",
+	ENOTSOCK:        "Socket operation on non-socket",
+	EDESTADDRREQ:    "Destination address required",
+	EMSGSIZE:        "Message too long",
+	EPROTOTYPE:      "Protocol wrong type for socket",
+	ENOPROTOOPT:     "Protocol not available",
+	EPROTONOSUPPORT: "Unknown protocol",
+	EOPNOTSUPP:      "Operation not supported",
+	EAFNOSUPPORT:    "Address family not supported by protocol family",
 	EADDRINUSE:      "Address already in use",
 	EADDRNOTAVAIL:   "Address not available",
-	EAFNOSUPPORT:    "Address family not supported by protocol family",
-	EAGAIN:          "Try again",
-	EALREADY:        "Socket already connected",
-	EBADF:           "Bad file number",
-	EBADFD:          "file descriptor in bad state",
-	EBADMSG:         "Trying to read unreadable message",
-	EBUSY:           "Device or resource busy",
-	ECANCELED:       "Operation canceled.",
-	ECHILD:          "No child processes",
-	ECONNABORTED:    "Connection aborted",
-	ECONNREFUSED:    "Connection refused",
-	ECONNRESET:      "Connection reset by peer",
-	EDEADLK:         "Deadlock condition",
-	EDESTADDRREQ:    "Destination address required",
-	EDOM:            "Math arg out of domain of func",
-	EDQUOT:          "Quota exceeded",
-	EEXIST:          "File exists",
-	EFAULT:          "Bad address",
-	EFBIG:           "File too large",
-	EHOSTUNREACH:    "Host is unreachable",
-	EIDRM:           "Identifier removed",
-	EILSEQ:          "EILSEQ",
-	EINPROGRESS:     "Connection already in progress",
-	EINTR:           "Interrupted system call",
-	EINVAL:          "Invalid argument",
-	EIO:             "I/O error",
-	EISCONN:         "Socket is already connected",
-	EISDIR:          "Is a directory",
-	ELOOP:           "Too many symbolic links",
-	EMFILE:          "Too many open files",
-	EMLINK:          "Too many links",
-	EMSGSIZE:        "Message too long",
-	EMULTIHOP:       "Multihop attempted",
-	ENAMETOOLONG:    "File name too long",
 	ENETDOWN:        "Network interface is not configured",
-	ENETRESET:       "Network dropped connection on reset",
 	ENETUNREACH:     "Network is unreachable",
-	ENFILE:          "File table overflow",
+	ENETRESET:       "Network dropped connection on reset",
+	ECONNABORTED:    "Connection aborted",
+	ECONNRESET:      "Connection reset by peer",
 	ENOBUFS:         "No buffer space available",
-	ENODEV:          "No such device",
-	ENOENT:          "No such file or directory",
-	ENOEXEC:         "Exec format error",
-	ENOLCK:          "No record locks available",
-	ENOLINK:         "The link has been severed",
-	ENOMEM:          "Out of memory",
-	ENOMSG:          "No message of desired type",
-	ENOPROTOOPT:     "Protocol not available",
-	ENOSPC:          "No space left on device",
-	ENOSYS:          "Not implemented on " + runtime.GOOS,
+	EISCONN:         "Socket is already connected",
 	ENOTCONN:        "Socket is not connected",
-	ENOTDIR:         "Not a directory",
-	ENOTEMPTY:       "Directory not empty",
-	ENOTRECOVERABLE: "State not recoverable",
-	ENOTSOCK:        "Socket operation on non-socket",
-	ENOTSUP:         "Not supported",
-	ENOTTY:          "Not a typewriter",
-	ENXIO:           "No such device or address",
-	EOVERFLOW:       "Value too large for defined data type",
-	EOWNERDEAD:      "Owner died",
-	EPERM:           "Operation not permitted",
-	EPIPE:           "Broken pipe",
-	EPROTO:          "Protocol error",
-	EPROTONOSUPPORT: "Unknown protocol",
-	EPROTOTYPE:      "Protocol wrong type for socket",
-	ERANGE:          "Math result not representable",
-	EROFS:           "Read-only file system",
-	ESPIPE:          "Illegal seek",
-	ESRCH:           "No such process",
-	ESTALE:          "Stale file handle",
 	ETIMEDOUT:       "Connection timed out",
-	ETXTBSY:         "Text file busy",
-	EXDEV:           "Cross-device link",
-	ENOTCAPABLE:     "Capabilities insufficient",
+	ECONNREFUSED:    "Connection refused",
+	EHOSTUNREACH:    "Host is unreachable",
+	EALREADY:        "Socket already connected",
+	EINPROGRESS:     "Connection already in progress",
+	ESTALE:          "Stale file handle",
+	EDQUOT:          "Quota exceeded",
+	ECANCELED:       "Operation canceled",
+	EOWNERDEAD:      "Owner died",
+	ENOTRECOVERABLE: "State not recoverable",
 }
 
 // Do the interface allocations only once for common
@@ -182,12 +192,6 @@ var (
 
 // errnoErr returns common boxed Errno values, to prevent
 // allocations at runtime.
-//
-// We set both noinline and nosplit to reduce code size, this function has many
-// call sites in the syscall package, inlining it causes a significant increase
-// of the compiled code; the function call ultimately does not make a difference
-// in the performance of syscall functions since the time is dominated by calls
-// to the imports and path resolution.
 //
 //go:noinline
 //go:nosplit

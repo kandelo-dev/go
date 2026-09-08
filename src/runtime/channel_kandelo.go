@@ -77,6 +77,24 @@ func atomicWait32(addr *uint32, expected uint32, timeout int64) uint32
 //
 //go:nosplit
 func doSyscall(number int32, a0, a1, a2 int64) (ret int64, errno int32) {
+	return doSyscall6(number, a0, a1, a2, 0, 0, 0)
+}
+
+// syscall_kandeloSyscall6 is the syscall package's entry into the channel
+// handshake. The syscall package declares a bodyless kandeloSyscall6 and this
+// linkname supplies the runtime implementation, mirroring how os_wasm.go
+// exposes syscall_now as syscall.now. The syscall package needs a low-level
+// primitive so os/internal-poll can perform read/write/open/close/etc. against
+// the kernel through the same channel the runtime already uses for write1.
+//
+//go:linkname syscall_kandeloSyscall6 syscall.kandeloSyscall6
+//go:nosplit
+func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
+	return doSyscall6(number, a0, a1, a2, a3, a4, a5)
+}
+
+//go:nosplit
+func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
 	base := uintptr(kandeloChannelBase)
 	if base == 0 {
 		// The host has not provisioned the channel base. Fail honestly rather
@@ -88,9 +106,9 @@ func doSyscall(number int32, a0, a1, a2 int64) (ret int64, errno int32) {
 	*(*int64)(unsafe.Pointer(base + chArgs + 0*8)) = a0
 	*(*int64)(unsafe.Pointer(base + chArgs + 1*8)) = a1
 	*(*int64)(unsafe.Pointer(base + chArgs + 2*8)) = a2
-	*(*int64)(unsafe.Pointer(base + chArgs + 3*8)) = 0
-	*(*int64)(unsafe.Pointer(base + chArgs + 4*8)) = 0
-	*(*int64)(unsafe.Pointer(base + chArgs + 5*8)) = 0
+	*(*int64)(unsafe.Pointer(base + chArgs + 3*8)) = a3
+	*(*int64)(unsafe.Pointer(base + chArgs + 4*8)) = a4
+	*(*int64)(unsafe.Pointer(base + chArgs + 5*8)) = a5
 	*(*uint32)(unsafe.Pointer(base + chFlags)) = 0
 
 	statusPtr := (*uint32)(unsafe.Pointer(base + chStatus))

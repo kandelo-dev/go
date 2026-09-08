@@ -183,35 +183,149 @@ const (
 		RIGHT_PATH_UNLINK_FILE
 )
 
-// https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-fd_closefd-fd---result-errno
-func fd_close(fd int32) Errno { return ENOSYS }
-
-// https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-fd_filestat_set_sizefd-fd-size-filesize---result-errno
-func fd_filestat_set_size(fd int32, set_size filesize) Errno { return ENOSYS }
-
-// https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-fd_preadfd-fd-iovs-iovec_array-offset-filesize---resultsize-errno
-func fd_pread(fd int32, iovs *iovec, iovsLen size, offset filesize, nread *size) Errno { return ENOSYS }
-
-func fd_pwrite(fd int32, iovs *iovec, iovsLen size, offset filesize, nwritten *size) Errno {
-	return ENOSYS
+// iovecAt returns a pointer to the i-th iovec in the array starting at iovs.
+//
+//go:nosplit
+func iovecAt(iovs *iovec, i size) *iovec {
+	return (*iovec)(unsafe.Add(unsafe.Pointer(iovs), uintptr(i)*unsafe.Sizeof(iovec{})))
 }
 
-func fd_read(fd int32, iovs *iovec, iovsLen size, nread *size) Errno { return ENOSYS }
+// fd_close routes to the kernel close(2) over the channel.
+func fd_close(fd int32) Errno {
+	_, errno := kandeloSyscall6(kSysClose, int64(fd), 0, 0, 0, 0, 0)
+	return kandeloErrno(errno)
+}
+
+func fd_filestat_set_size(fd int32, set_size filesize) Errno {
+	_, errno := kandeloSyscall6(kSysFtruncate, int64(fd), int64(set_size), 0, 0, 0, 0)
+	return kandeloErrno(errno)
+}
+
+// fd_pread performs positioned reads by issuing one kernel pread(2) per iovec.
+func fd_pread(fd int32, iovs *iovec, iovsLen size, offset filesize, nread *size) Errno {
+	return channelReadv(kSysPread, fd, iovs, iovsLen, int64(offset), nread)
+}
+
+// fd_pwrite performs positioned writes by issuing one kernel pwrite(2) per iovec.
+func fd_pwrite(fd int32, iovs *iovec, iovsLen size, offset filesize, nwritten *size) Errno {
+	return channelWritev(kSysPwrite, fd, iovs, iovsLen, int64(offset), nwritten)
+}
+
+// fd_read scatters a read across the iovec array using kernel read(2).
+func fd_read(fd int32, iovs *iovec, iovsLen size, nread *size) Errno {
+	return channelReadv(kSysRead, fd, iovs, iovsLen, -1, nread)
+}
 
 func fd_readdir(fd int32, buf *byte, bufLen size, cookie dircookie, nwritten *size) Errno {
 	return ENOSYS
 }
 
-func fd_seek(fd int32, offset filedelta, whence uint32, newoffset *filesize) Errno { return ENOSYS }
+func fd_seek(fd int32, offset filedelta, whence uint32, newoffset *filesize) Errno {
+	ret, errno := kandeloSyscall6(kSysLseek, int64(fd), int64(offset), int64(whence), 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	*newoffset = filesize(ret)
+	return 0
+}
 
 // https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-fd_fdstat_set_rightsfd-fd-fs_rights_base-rights-fs_rights_inheriting-rights---result-errno
 func fd_fdstat_set_rights(fd int32, rightsBase rights, rightsInheriting rights) Errno { return ENOSYS }
 
-func fd_filestat_get(fd int32, buf unsafe.Pointer) Errno { return ENOSYS }
+// fd_filestat_get fills a Stat_t from the kernel fstat(2). The kernel writes a
+// native struct stat directly into the target via the raw pointer, so this
+// converts that into the Go Stat_t layout expected by the os package.
+func fd_filestat_get(fd int32, buf unsafe.Pointer) Errno {
+	var ks kernelStat
+	_, errno := kandeloSyscall6(kSysFstat, int64(fd), int64(uintptr(unsafe.Pointer(&ks))), 0, 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	ks.toStat((*Stat_t)(buf))
+	return 0
+}
 
-func fd_write(fd int32, iovs *iovec, iovsLen size, nwritten *size) Errno { return ENOSYS }
+// channelWritev writes each iovec through the channel using the given kernel
+// syscall number (write or pwrite). offset < 0 selects the non-positioned form.
+//
+//go:nosplit
+func channelWritev(number int32, fd int32, iovs *iovec, iovsLen size, offset int64, nwritten *size) Errno {
+	var total size
+	for i := size(0); i < iovsLen; i++ {
+		iov := iovecAt(iovs, i)
+		if iov.bufLen == 0 {
+			continue
+		}
+		var ret int64
+		var errno int32
+		if offset < 0 {
+			ret, errno = kandeloSyscall6(number, int64(fd), int64(iov.buf), int64(iov.bufLen), 0, 0, 0)
+		} else {
+			ret, errno = kandeloSyscall6(number, int64(fd), int64(iov.buf), int64(iov.bufLen), offset, 0, 0)
+		}
+		if errno != 0 {
+			if total != 0 {
+				break
+			}
+			return kandeloErrno(errno)
+		}
+		total += size(ret)
+		if offset >= 0 {
+			offset += ret
+		}
+		if size(ret) < iov.bufLen {
+			break // short write
+		}
+	}
+	*nwritten = total
+	return 0
+}
 
-func fd_sync(fd int32) Errno { return ENOSYS }
+// channelReadv reads into each iovec through the channel using the given kernel
+// syscall number (read or pread). offset < 0 selects the non-positioned form.
+//
+//go:nosplit
+func channelReadv(number int32, fd int32, iovs *iovec, iovsLen size, offset int64, nread *size) Errno {
+	var total size
+	for i := size(0); i < iovsLen; i++ {
+		iov := iovecAt(iovs, i)
+		if iov.bufLen == 0 {
+			continue
+		}
+		var ret int64
+		var errno int32
+		if offset < 0 {
+			ret, errno = kandeloSyscall6(number, int64(fd), int64(iov.buf), int64(iov.bufLen), 0, 0, 0)
+		} else {
+			ret, errno = kandeloSyscall6(number, int64(fd), int64(iov.buf), int64(iov.bufLen), offset, 0, 0)
+		}
+		if errno != 0 {
+			if total != 0 {
+				break
+			}
+			return kandeloErrno(errno)
+		}
+		total += size(ret)
+		if offset >= 0 {
+			offset += ret
+		}
+		if size(ret) < iov.bufLen {
+			break // short read / EOF
+		}
+	}
+	*nread = total
+	return 0
+}
+
+// fd_write gathers the iovec array through kernel write(2).
+func fd_write(fd int32, iovs *iovec, iovsLen size, nwritten *size) Errno {
+	return channelWritev(kSysWrite, fd, iovs, iovsLen, -1, nwritten)
+}
+
+func fd_sync(fd int32) Errno {
+	_, errno := kandeloSyscall6(kSysFsync, int64(fd), 0, 0, 0, 0, 0)
+	return kandeloErrno(errno)
+}
 
 func path_create_directory(fd int32, path *byte, pathLen size) Errno { return ENOSYS }
 
@@ -247,7 +361,13 @@ func path_open(rootFD int32, dirflags lookupflags, path *byte, pathLen size, ofl
 	return ENOSYS
 }
 
-func random_get(buf *byte, bufLen size) Errno { return ENOSYS }
+func random_get(buf *byte, bufLen size) Errno {
+	if bufLen == 0 {
+		return 0
+	}
+	_, errno := kandeloSyscall6(kSysGetrandom, int64(uintptr(unsafe.Pointer(buf))), int64(bufLen), 0, 0, 0, 0)
+	return kandeloErrno(errno)
+}
 
 // https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-fdstat-record
 // fdflags must be at offset 2, hence the uint16 type rather than the
@@ -260,9 +380,27 @@ type fdstat struct {
 	rightsInheriting rights
 }
 
-func fd_fdstat_get(fd int32, buf *fdstat) Errno { return ENOSYS }
+// fd_fdstat_get synthesizes a WASI-style fdstat from the kernel. Kandelo has no
+// single fdstat syscall, so the file type comes from fstat(2) and the flags are
+// reported as zero (the channel is synchronous/blocking). Returning success
+// keeps the os package's stdio setup and file-type queries working.
+func fd_fdstat_get(fd int32, buf *fdstat) Errno {
+	var st Stat_t
+	if errno := fd_filestat_get(fd, unsafe.Pointer(&st)); errno != 0 {
+		return errno
+	}
+	buf.filetype = st.Filetype
+	buf.fdflags = 0
+	buf.rightsBase = fullRights
+	buf.rightsInheriting = fullRights
+	return 0
+}
 
-func fd_fdstat_set_flags(fd int32, flags fdflags) Errno { return ENOSYS }
+// fd_fdstat_set_flags is a no-op success. The Kandelo syscall channel is
+// synchronous and blocking, so non-blocking flag changes have no backing
+// mechanism; reporting success lets os.NewFile proceed without treating stdio
+// setup as a hard failure.
+func fd_fdstat_set_flags(fd int32, flags fdflags) Errno { return 0 }
 
 // fd_fdstat_get_flags is accessed from internal/syscall/unix
 //go:linkname fd_fdstat_get_flags
@@ -322,41 +460,14 @@ var preopens []opendir
 var cwd string
 
 func init() {
-	dirNameBuf := make([]byte, 256)
-	// We start looking for preopens at fd=3 because 0, 1, and 2 are reserved
-	// for standard input and outputs.
-	for preopenFd := int32(3); ; preopenFd++ {
-		var prestat prestat
-
-		errno := fd_prestat_get(preopenFd, &prestat)
-		if errno == EBADF {
-			break
-		}
-		if errno == ENOTDIR || prestat.typ != preopentypeDir {
-			continue
-		}
-		if errno != 0 {
-			panic("fd_prestat: " + errno.Error())
-		}
-		if int(prestat.dir.prNameLen) > len(dirNameBuf) {
-			dirNameBuf = make([]byte, prestat.dir.prNameLen)
-		}
-
-		errno = fd_prestat_dir_name(preopenFd, &dirNameBuf[0], prestat.dir.prNameLen)
-		if errno != 0 {
-			panic("fd_prestat_dir_name: " + errno.Error())
-		}
-
-		preopens = append(preopens, opendir{
-			fd:   preopenFd,
-			name: string(dirNameBuf[:prestat.dir.prNameLen]),
-		})
-	}
-
+	// Unlike wasip1, Kandelo does not expose a WASI preopen table: the kernel
+	// resolves absolute and cwd-relative paths directly, so there is no fd
+	// scan to perform here. We only seed the working-directory string used by
+	// Getwd; the kernel is the authority for actual path resolution.
 	if cwd, _ = Getenv("PWD"); cwd != "" {
 		cwd = joinPath("/", cwd)
-	} else if len(preopens) > 0 {
-		cwd = preopens[0].name
+	} else {
+		cwd = "/"
 	}
 }
 
@@ -489,96 +600,30 @@ func preparePath(path string) (int32, *byte, size) {
 	return dirFd, unsafe.StringData(path), size(len(path))
 }
 
+// Open opens path relative to the process working directory. Unlike the wasip1
+// port, Kandelo has no WASI preopen table: the kernel resolves ordinary
+// absolute and cwd-relative paths directly, so Open routes straight to the
+// kernel openat(2) with AT_FDCWD and Linux-style open flags (the O_* constants
+// in syscall_kandelo.go already carry Linux values).
 func Open(path string, openmode int, perm uint32) (int, error) {
-	if path == "" {
-		return -1, EINVAL
-	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	return openat(dirFd, pathPtr, pathLen, openmode, perm)
+	return Openat(int(kAtFdcwd), path, openmode, perm)
 }
 
 func Openat(dirFd int, path string, openmode int, perm uint32) (int, error) {
-	return openat(int32(dirFd), unsafe.StringData(path), size(len(path)), openmode, perm)
-}
-
-func openat(dirFd int32, pathPtr *byte, pathLen size, openmode int, perm uint32) (int, error) {
-	var oflags oflags
-	if (openmode & O_CREATE) != 0 {
-		oflags |= OFLAG_CREATE
+	if path == "" {
+		return -1, ENOENT
 	}
-	if (openmode & O_TRUNC) != 0 {
-		oflags |= OFLAG_TRUNC
+	p, err := BytePtrFromString(path)
+	if err != nil {
+		return -1, err
 	}
-	if (openmode & O_EXCL) != 0 {
-		oflags |= OFLAG_EXCL
+	ret, errno := kandeloSyscall6(kSysOpenat, int64(dirFd),
+		int64(uintptr(unsafe.Pointer(p))), int64(openmode), int64(perm), 0, 0)
+	runtime.KeepAlive(p)
+	if errno != 0 {
+		return -1, kandeloErrno(errno)
 	}
-
-	var rights rights
-	switch openmode & (O_RDONLY | O_WRONLY | O_RDWR) {
-	case O_RDONLY:
-		rights = fileRights & ^writeRights
-	case O_WRONLY:
-		rights = fileRights & ^readRights
-	case O_RDWR:
-		rights = fileRights
-	}
-
-	if (openmode & O_DIRECTORY) != 0 {
-		if openmode&(O_WRONLY|O_RDWR) != 0 {
-			return -1, EISDIR
-		}
-		oflags |= OFLAG_DIRECTORY
-		rights &= dirRights
-	}
-
-	var fdflags fdflags
-	if (openmode & O_APPEND) != 0 {
-		fdflags |= FDFLAG_APPEND
-	}
-	if (openmode & O_SYNC) != 0 {
-		fdflags |= FDFLAG_SYNC
-	}
-
-	var lflags lookupflags
-	if openmode&O_NOFOLLOW == 0 {
-		lflags = LOOKUP_SYMLINK_FOLLOW
-	}
-
-	var fd int32
-	errno := path_open(
-		dirFd,
-		lflags,
-		pathPtr,
-		pathLen,
-		oflags,
-		rights,
-		fileRights,
-		fdflags,
-		&fd,
-	)
-	if errno == EISDIR && oflags == 0 && fdflags == 0 && ((rights & writeRights) == 0) {
-		// wasmtime and wasmedge will error if attempting to open a directory
-		// because we are asking for too many rights. However, we cannot
-		// determine ahead of time if the path we are about to open is a
-		// directory, so instead we fallback to a second call to path_open with
-		// a more limited set of rights.
-		//
-		// This approach is subject to a race if the file system is modified
-		// concurrently, so we also inject OFLAG_DIRECTORY to ensure that we do
-		// not accidentally open a file which is not a directory.
-		errno = path_open(
-			dirFd,
-			LOOKUP_SYMLINK_FOLLOW,
-			pathPtr,
-			pathLen,
-			oflags|OFLAG_DIRECTORY,
-			rights&dirRights,
-			fileRights,
-			fdflags,
-			&fd,
-		)
-	}
-	return int(fd), errnoErr(errno)
+	return int(ret), nil
 }
 
 func Close(fd int) error {
@@ -622,29 +667,40 @@ type Stat_t struct {
 	Gid uint32
 }
 
-func Stat(path string, st *Stat_t) error {
+// aTSymlinkNofollow matches Linux AT_SYMLINK_NOFOLLOW; Lstat passes it to
+// fstatat so symbolic links are not dereferenced.
+const aTSymlinkNofollow = 0x100
+
+func channelStatAt(dirFd int32, path string, flags int, st *Stat_t) error {
 	if path == "" {
-		return EINVAL
+		return ENOENT
 	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	errno := path_filestat_get(dirFd, LOOKUP_SYMLINK_FOLLOW, pathPtr, pathLen, unsafe.Pointer(st))
-	setDefaultMode(st)
-	return errnoErr(errno)
+	p, err := BytePtrFromString(path)
+	if err != nil {
+		return err
+	}
+	var ks kernelStat
+	_, errno := kandeloSyscall6(kSysFstatat, int64(dirFd),
+		int64(uintptr(unsafe.Pointer(p))), int64(uintptr(unsafe.Pointer(&ks))),
+		int64(flags), 0, 0)
+	runtime.KeepAlive(p)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	ks.toStat(st)
+	return nil
+}
+
+func Stat(path string, st *Stat_t) error {
+	return channelStatAt(kAtFdcwd, path, 0, st)
 }
 
 func Lstat(path string, st *Stat_t) error {
-	if path == "" {
-		return EINVAL
-	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	errno := path_filestat_get(dirFd, 0, pathPtr, pathLen, unsafe.Pointer(st))
-	setDefaultMode(st)
-	return errnoErr(errno)
+	return channelStatAt(kAtFdcwd, path, aTSymlinkNofollow, st)
 }
 
 func Fstat(fd int, st *Stat_t) error {
 	errno := fd_filestat_get(int32(fd), unsafe.Pointer(st))
-	setDefaultMode(st)
 	return errnoErr(errno)
 }
 
