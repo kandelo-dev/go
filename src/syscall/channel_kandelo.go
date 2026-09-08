@@ -32,6 +32,7 @@ const (
 	kSysLseek    int32 = 5
 	kSysFstat    int32 = 6
 	kSysStat     int32 = 11
+	kSysChmod    int32 = 20
 	kSysGetcwd   int32 = 23
 	kSysChdir    int32 = 24
 	kSysIsatty   int32 = 42
@@ -40,13 +41,28 @@ const (
 	kSysOpenat   int32 = 69
 	kSysFtruncate int32 = 79
 	kSysFsync    int32 = 80
+	kSysTruncate int32 = 85
+	kSysFchmod   int32 = 87
 	kSysFstatat  int32 = 93
+	kSysUnlinkat int32 = 94
+	kSysMkdirat  int32 = 95
+	kSysRenameat int32 = 96
+	kSysFchmodat int32 = 98
+	kSysLinkat   int32 = 100
+	kSysSymlinkat int32 = 101
+	kSysReadlinkat int32 = 102
 	kSysGetrandom int32 = 120
+	kSysUtimensat int32 = 125
+	kSysFchdir   int32 = 127
 )
 
 // kAtFdcwd is the dirfd sentinel meaning "resolve relative to the current
 // working directory", matching musl's AT_FDCWD on this arch.
 const kAtFdcwd int32 = -100
+
+// kAtRemovedir is the unlinkat(2) flag selecting directory removal (rmdir),
+// matching Linux/musl AT_REMOVEDIR.
+const kAtRemovedir int32 = 0x200
 
 // kandeloErrno converts a raw channel errno into a syscall.Errno, mapping the
 // runtime's "no channel base" ENOSYS sentinel (38) through unchanged since the

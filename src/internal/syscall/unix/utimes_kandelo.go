@@ -6,37 +6,11 @@
 
 package unix
 
-import (
-	"syscall"
-	"unsafe"
-)
+import "syscall"
 
-//go:wasmimport wasi_snapshot_preview1 path_filestat_set_times
-//go:noescape
-func path_filestat_set_times(fd int32, flags uint32, path *byte, pathLen size, atim uint64, mtim uint64, fstflags uint32) syscall.Errno
-
+// Utimensat sets file times relative to dirfd through the kernel utimensat(2)
+// over the Kandelo channel (syscall.Utimensat), rather than the wasip1
+// path_filestat_set_times import the Kandelo host does not provide.
 func Utimensat(dirfd int, path string, times *[2]syscall.Timespec, flag int) error {
-	if path == "" {
-		return syscall.EINVAL
-	}
-	atime := syscall.TimespecToNsec(times[0])
-	mtime := syscall.TimespecToNsec(times[1])
-
-	var fflag uint32
-	if times[0].Nsec != UTIME_OMIT {
-		fflag |= syscall.FILESTAT_SET_ATIM
-	}
-	if times[1].Nsec != UTIME_OMIT {
-		fflag |= syscall.FILESTAT_SET_MTIM
-	}
-	errno := path_filestat_set_times(
-		int32(dirfd),
-		syscall.LOOKUP_SYMLINK_FOLLOW,
-		unsafe.StringData(path),
-		size(len(path)),
-		uint64(atime),
-		uint64(mtime),
-		fflag,
-	)
-	return errnoErr(errno)
+	return syscall.Utimensat(dirfd, path, times, flag)
 }

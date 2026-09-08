@@ -65,12 +65,73 @@ func readRandom(r []byte) int {
 	return int(ret)
 }
 
-// goenvs initializes os.Args and the environment.
+// The host exposes process startup metadata (argv and environ) through plain
+// kernel.* function imports, not the syscall channel. This mirrors the musl CRT
+// contract in host/src/worker-main.ts (buildKernelImports): the guest asks for
+// the count, then reads each entry into a guest-owned buffer. Each read is a
+// two-step protocol:
 //
-// STUB: no host args/environ backend yet, so both are empty.
+//   n := kernel_argv_read(i, nil, 0)   // side-effect-free length query
+//   kernel_argv_read(i, &buf[0], n)    // exact-capacity copy
+//
+// The copied bytes are the raw UTF-8 of the entry with NO trailing NUL; the
+// returned length is the exact byte count (negative on error). Environ entries
+// use the same protocol via kernel_environ_count/kernel_environ_get.
+
+//go:wasmimport kernel kernel_get_argc
+func kernel_get_argc() int32
+
+//go:wasmimport kernel kernel_argv_read
+func kernel_argv_read(index int32, buf unsafe.Pointer, bufMax int32) int32
+
+//go:wasmimport kernel kernel_environ_count
+func kernel_environ_count() int32
+
+//go:wasmimport kernel kernel_environ_get
+func kernel_environ_get(index int32, buf unsafe.Pointer, bufMax int32) int32
+
+// readStartupEntry reads argv[index] (arg==true) or environ[index] (arg==false)
+// from the host into a freshly allocated string. It returns "" if the host
+// reports an error or a non-positive length, which keeps a malformed entry from
+// aborting startup.
+func readStartupEntry(index int32, arg bool) string {
+	read := kernel_environ_get
+	if arg {
+		read = kernel_argv_read
+	}
+	n := read(index, nil, 0)
+	if n <= 0 {
+		return ""
+	}
+	buf := make([]byte, n)
+	got := read(index, unsafe.Pointer(&buf[0]), n)
+	if got <= 0 {
+		return ""
+	}
+	return string(buf[:got])
+}
+
+// goenvs initializes os.Args and the environment from the host kernel.* startup
+// imports, mirroring how os_wasip1.go's goenvs fills argslice and envs from the
+// WASI args_get/environ_get calls.
 func goenvs() {
-	argslice = make([]string, 0)
-	envs = make([]string, 0)
+	argc := kernel_get_argc()
+	if argc < 0 {
+		argc = 0
+	}
+	argslice = make([]string, argc)
+	for i := int32(0); i < argc; i++ {
+		argslice[i] = readStartupEntry(i, true)
+	}
+
+	envc := kernel_environ_count()
+	if envc < 0 {
+		envc = 0
+	}
+	envs = make([]string, envc)
+	for i := int32(0); i < envc; i++ {
+		envs[i] = readStartupEntry(i, false)
+	}
 }
 
 // walltime returns the wall-clock time via CLOCK_REALTIME.

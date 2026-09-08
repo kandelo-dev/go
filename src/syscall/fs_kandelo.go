@@ -636,13 +636,36 @@ func CloseOnExec(fd int) {
 	// nothing to do - no exec
 }
 
-func Mkdir(path string, perm uint32) error {
-	if path == "" {
-		return EINVAL
+// pathArg converts a Go string into a NUL-terminated pointer suitable for a
+// channel path argument (the kernel derives the length from the terminator, as
+// it does for openat). The returned *byte must be kept alive across the syscall
+// with runtime.KeepAlive.
+func pathArg(path string) (*byte, int64, error) {
+	p, err := BytePtrFromString(path)
+	if err != nil {
+		return nil, 0, err
 	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	errno := path_create_directory(dirFd, pathPtr, pathLen)
-	return errnoErr(errno)
+	return p, int64(uintptr(unsafe.Pointer(p))), nil
+}
+
+func Mkdir(path string, perm uint32) error {
+	return Mkdirat(int(kAtFdcwd), path, perm)
+}
+
+// Mkdirat creates a directory relative to dirFd via the kernel mkdirat(2).
+// Kandelo resolves cwd-relative paths in the kernel, so callers pass ordinary
+// absolute or cwd-relative paths with kAtFdcwd, matching Openat.
+func Mkdirat(dirFd int, path string, perm uint32) error {
+	if path == "" {
+		return ENOENT
+	}
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysMkdirat, int64(dirFd), ptr, int64(perm), 0, 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func ReadDir(fd int, buf []byte, cookie dircookie) (int, error) {
@@ -717,31 +740,59 @@ func setDefaultMode(st *Stat_t) {
 }
 
 func Unlink(path string) error {
+	return Unlinkat(int(kAtFdcwd), path, 0)
+}
+
+// Unlinkat removes a name relative to dirFd via the kernel unlinkat(2). The
+// AT_REMOVEDIR flag (kAtRemovedir) selects directory removal, which is how
+// Rmdir is expressed on this arch.
+func Unlinkat(dirFd int, path string, flags int) error {
 	if path == "" {
-		return EINVAL
+		return ENOENT
 	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	errno := path_unlink_file(dirFd, pathPtr, pathLen)
-	return errnoErr(errno)
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysUnlinkat, int64(dirFd), ptr, int64(flags), 0, 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Rmdir(path string) error {
-	if path == "" {
-		return EINVAL
-	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	errno := path_remove_directory(dirFd, pathPtr, pathLen)
-	return errnoErr(errno)
+	return Unlinkat(int(kAtFdcwd), path, int(kAtRemovedir))
 }
 
 func Chmod(path string, mode uint32) error {
-	var stat Stat_t
-	return Stat(path, &stat)
+	if path == "" {
+		return ENOENT
+	}
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysChmod, ptr, int64(mode), 0, 0, 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Fchmod(fd int, mode uint32) error {
-	var stat Stat_t
-	return Fstat(fd, &stat)
+	_, errno := kandeloSyscall6(kSysFchmod, int64(fd), int64(mode), 0, 0, 0, 0)
+	return errnoErr(kandeloErrno(errno))
+}
+
+// Fchmodat changes a file mode relative to dirFd via the kernel fchmodat(2).
+func Fchmodat(dirFd int, path string, mode uint32, flags int) error {
+	if path == "" {
+		return ENOENT
+	}
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysFchmodat, int64(dirFd), ptr, int64(mode), int64(flags), 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Chown(path string, uid, gid int) error {
@@ -756,66 +807,101 @@ func Lchown(path string, uid, gid int) error {
 	return ENOSYS
 }
 
-func UtimesNano(path string, ts []Timespec) error {
-	// UTIME_OMIT value must match internal/syscall/unix/at_wasip1.go
-	const UTIME_OMIT = -0x2
-	if path == "" {
-		return EINVAL
+// Go's UTIME_OMIT sentinel (matches internal/syscall/unix and os _UTIME_OMIT).
+const goUTIME_OMIT = -0x2
+
+// Kernel utimensat tv_nsec sentinels (crates/runtime-core/src/syscalls.rs).
+// The kernel interprets these directly in the WasmTimespec it reads, so the
+// Go-side sentinel must be translated before the channel call.
+const (
+	kUtimeNow  = 0x3fffffff
+	kUtimeOmit = 0x3ffffffe
+)
+
+// Utimensat sets the access/modification times of path (relative to dirFd) via
+// the kernel utimensat(2). Go's UTIME_OMIT sentinel is translated to the
+// kernel's tv_nsec sentinel so an omitted timestamp is left unchanged by the
+// kernel rather than requiring a pre-stat here.
+func Utimensat(dirFd int, path string, ts *[2]Timespec, flags int) error {
+	// Timespec has the same {Sec, Nsec int64} layout as the kernel's
+	// WasmTimespec, so a translated copy can be passed by pointer directly.
+	var kt [2]Timespec
+	for i := 0; i < 2; i++ {
+		kt[i] = ts[i]
+		if ts[i].Nsec == goUTIME_OMIT {
+			kt[i].Nsec = kUtimeOmit
+		}
 	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	atime := TimespecToNsec(ts[0])
-	mtime := TimespecToNsec(ts[1])
-	if ts[0].Nsec == UTIME_OMIT || ts[1].Nsec == UTIME_OMIT {
-		var st Stat_t
-		if err := Stat(path, &st); err != nil {
+
+	var p *byte
+	var pathPtr int64
+	if path != "" {
+		var err error
+		p, pathPtr, err = pathArg(path)
+		if err != nil {
 			return err
 		}
-		if ts[0].Nsec == UTIME_OMIT {
-			atime = int64(st.Atime)
-		}
-		if ts[1].Nsec == UTIME_OMIT {
-			mtime = int64(st.Mtime)
-		}
 	}
-	errno := path_filestat_set_times(
-		dirFd,
-		LOOKUP_SYMLINK_FOLLOW,
-		pathPtr,
-		pathLen,
-		timestamp(atime),
-		timestamp(mtime),
-		FILESTAT_SET_ATIM|FILESTAT_SET_MTIM,
-	)
-	return errnoErr(errno)
+	_, errno := kandeloSyscall6(kSysUtimensat, int64(dirFd), pathPtr,
+		int64(uintptr(unsafe.Pointer(&kt[0]))), int64(flags), 0, 0)
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(&kt)
+	return errnoErr(kandeloErrno(errno))
+}
+
+func UtimesNano(path string, ts []Timespec) error {
+	if path == "" {
+		return ENOENT
+	}
+	if len(ts) != 2 {
+		return EINVAL
+	}
+	var a [2]Timespec
+	a[0], a[1] = ts[0], ts[1]
+	return Utimensat(int(kAtFdcwd), path, &a, 0)
 }
 
 func Rename(from, to string) error {
-	if from == "" || to == "" {
-		return EINVAL
+	return Renameat(int(kAtFdcwd), from, int(kAtFdcwd), to)
+}
+
+// Renameat renames oldpath (relative to oldDirFd) to newpath (relative to
+// newDirFd) via the kernel renameat(2).
+func Renameat(oldDirFd int, oldpath string, newDirFd int, newpath string) error {
+	if oldpath == "" || newpath == "" {
+		return ENOENT
 	}
-	oldDirFd, oldPathPtr, oldPathLen := preparePath(from)
-	newDirFd, newPathPtr, newPathLen := preparePath(to)
-	errno := path_rename(
-		oldDirFd,
-		oldPathPtr,
-		oldPathLen,
-		newDirFd,
-		newPathPtr,
-		newPathLen,
-	)
-	return errnoErr(errno)
+	oldP, oldPtr, err := pathArg(oldpath)
+	if err != nil {
+		return err
+	}
+	newP, newPtr, err := pathArg(newpath)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysRenameat, int64(oldDirFd), oldPtr, int64(newDirFd), newPtr, 0, 0)
+	runtime.KeepAlive(oldP)
+	runtime.KeepAlive(newP)
+	return errnoErr(kandeloErrno(errno))
+}
+
+// Fstatat fills st from the kernel fstatat(2) for path relative to dirFd. flags
+// carries AT_SYMLINK_NOFOLLOW (aTSymlinkNofollow) for Lstat-style lookups.
+func Fstatat(dirFd int, path string, st *Stat_t, flags int) error {
+	return channelStatAt(int32(dirFd), path, flags, st)
 }
 
 func Truncate(path string, length int64) error {
 	if path == "" {
-		return EINVAL
+		return ENOENT
 	}
-	fd, err := Open(path, O_WRONLY, 0)
+	p, ptr, err := pathArg(path)
 	if err != nil {
 		return err
 	}
-	defer Close(fd)
-	return Ftruncate(fd, length)
+	_, errno := kandeloSyscall6(kSysTruncate, ptr, length, 0, 0, 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Ftruncate(fd int, length int64) error {
@@ -825,90 +911,140 @@ func Ftruncate(fd int, length int64) error {
 
 const ImplementsGetwd = true
 
+// Getwd returns the process working directory from the kernel getcwd(2). The
+// kernel is authoritative for path resolution, so this asks it directly rather
+// than trusting the cached cwd string. The kernel writes the path with a
+// trailing NUL and returns the length including that NUL (Linux convention).
 func Getwd() (string, error) {
-	return cwd, nil
+	for size := 128; size <= 1<<16; size *= 2 {
+		buf := make([]byte, size)
+		ret, errno := kandeloSyscall6(kSysGetcwd,
+			int64(uintptr(unsafe.Pointer(&buf[0]))), int64(size), 0, 0, 0, 0)
+		if errno == 0 {
+			n := int(ret)
+			if n > 0 && buf[n-1] == 0 {
+				n-- // drop the trailing NUL the kernel included in the count
+			}
+			cwd = string(buf[:n])
+			return cwd, nil
+		}
+		if kandeloErrno(errno) != ERANGE {
+			return "", kandeloErrno(errno)
+		}
+	}
+	return "", ERANGE
 }
 
 func Chdir(path string) error {
 	if path == "" {
-		return EINVAL
+		return ENOENT
 	}
-
-	dir := "/"
-	if !isAbs(path) {
-		dir = cwd
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
 	}
-	path = joinPath(dir, path)
-
-	var stat Stat_t
-	dirFd, pathPtr, pathLen := preparePath(path)
-	errno := path_filestat_get(dirFd, LOOKUP_SYMLINK_FOLLOW, pathPtr, pathLen, unsafe.Pointer(&stat))
+	_, errno := kandeloSyscall6(kSysChdir, ptr, 0, 0, 0, 0, 0)
+	runtime.KeepAlive(p)
 	if errno != 0 {
-		return errnoErr(errno)
+		return kandeloErrno(errno)
 	}
-	if stat.Filetype != FILETYPE_DIRECTORY {
-		return ENOTDIR
+	// Keep the cached cwd string coherent for any residual local resolver use.
+	if isAbs(path) {
+		cwd = joinPath("/", path)
+	} else {
+		cwd = joinPath(cwd, path)
 	}
-	cwd = path
+	return nil
+}
+
+// Fchdir changes the working directory to the one referenced by fd via the
+// kernel fchdir(2). The cached cwd string is refreshed from the kernel so
+// later Getwd/relative resolution stays coherent.
+func Fchdir(fd int) error {
+	_, errno := kandeloSyscall6(kSysFchdir, int64(fd), 0, 0, 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	if wd, err := Getwd(); err == nil {
+		cwd = wd
+	}
 	return nil
 }
 
 func Readlink(path string, buf []byte) (n int, err error) {
+	return Readlinkat(int(kAtFdcwd), path, buf)
+}
+
+// Readlinkat reads the target of the symlink at path (relative to dirFd) into
+// buf via the kernel readlinkat(2), returning the number of bytes written.
+func Readlinkat(dirFd int, path string, buf []byte) (int, error) {
 	if path == "" {
-		return 0, EINVAL
+		return 0, ENOENT
 	}
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	dirFd, pathPtr, pathLen := preparePath(path)
-	var nwritten size
-	errno := path_readlink(
-		dirFd,
-		pathPtr,
-		pathLen,
-		&buf[0],
-		size(len(buf)),
-		&nwritten,
-	)
-	// For some reason wasmtime returns ERANGE when the output buffer is
-	// shorter than the symbolic link value. os.Readlink expects a nil
-	// error and uses the fact that n is greater or equal to the buffer
-	// length to assume that it needs to try again with a larger size.
-	// This condition is handled in os.Readlink.
-	return int(nwritten), errnoErr(errno)
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return 0, err
+	}
+	ret, errno := kandeloSyscall6(kSysReadlinkat, int64(dirFd), ptr,
+		int64(uintptr(unsafe.Pointer(&buf[0]))), int64(len(buf)), 0, 0)
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(buf)
+	if errno != 0 {
+		return 0, kandeloErrno(errno)
+	}
+	return int(ret), nil
 }
 
 func Link(path, link string) error {
-	if path == "" || link == "" {
-		return EINVAL
+	return Linkat(int(kAtFdcwd), path, int(kAtFdcwd), link, 0)
+}
+
+// Linkat creates newpath (relative to newDirFd) as a hard link to oldpath
+// (relative to oldDirFd) via the kernel linkat(2).
+func Linkat(oldDirFd int, oldpath string, newDirFd int, newpath string, flags int) error {
+	if oldpath == "" || newpath == "" {
+		return ENOENT
 	}
-	oldDirFd, oldPathPtr, oldPathLen := preparePath(path)
-	newDirFd, newPathPtr, newPathLen := preparePath(link)
-	errno := path_link(
-		oldDirFd,
-		0,
-		oldPathPtr,
-		oldPathLen,
-		newDirFd,
-		newPathPtr,
-		newPathLen,
-	)
-	return errnoErr(errno)
+	oldP, oldPtr, err := pathArg(oldpath)
+	if err != nil {
+		return err
+	}
+	newP, newPtr, err := pathArg(newpath)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysLinkat, int64(oldDirFd), oldPtr, int64(newDirFd), newPtr, int64(flags), 0)
+	runtime.KeepAlive(oldP)
+	runtime.KeepAlive(newP)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Symlink(path, link string) error {
-	if path == "" || link == "" {
-		return EINVAL
+	return Symlinkat(path, int(kAtFdcwd), link)
+}
+
+// Symlinkat creates the symlink linkpath (relative to newDirFd) pointing at
+// target via the kernel symlinkat(2). target is stored verbatim and is not
+// resolved, so it is passed as an ordinary NUL-terminated string.
+func Symlinkat(target string, newDirFd int, linkpath string) error {
+	if target == "" || linkpath == "" {
+		return ENOENT
 	}
-	dirFd, pathPtr, pathlen := preparePath(link)
-	errno := path_symlink(
-		unsafe.StringData(path),
-		size(len(path)),
-		dirFd,
-		pathPtr,
-		pathlen,
-	)
-	return errnoErr(errno)
+	tP, tPtr, err := pathArg(target)
+	if err != nil {
+		return err
+	}
+	lP, lPtr, err := pathArg(linkpath)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysSymlinkat, tPtr, int64(newDirFd), lPtr, 0, 0, 0)
+	runtime.KeepAlive(tP)
+	runtime.KeepAlive(lP)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Fsync(fd int) error {

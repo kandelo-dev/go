@@ -8,15 +8,16 @@ package unix
 
 import (
 	"syscall"
-	"unsafe"
 )
 
-// The values of these constants are not part of the WASI API.
+// The *at wrappers used by the os package (root_openat.go, removeall_at.go,
+// os.Root, etc.) route through the real kernel *at syscalls implemented in
+// syscall/fs_kandelo.go over the Kandelo channel. Unlike the wasip1 port, there
+// are no wasi_snapshot_preview1 path_* imports here: the kernel resolves
+// absolute and cwd-relative paths directly.
 const (
 	// UTIME_OMIT is the sentinel value to indicate that a time value should not
-	// be changed. It is useful for example to indicate for example with UtimesNano
-	// to avoid changing AccessTime or ModifiedTime.
-	// Its value must match syscall/fs_wasip1.go
+	// be changed. Its value must match syscall/fs_kandelo.go's UtimesNano.
 	UTIME_OMIT = -0x2
 
 	AT_REMOVEDIR        = 0x200
@@ -24,154 +25,42 @@ const (
 )
 
 func Unlinkat(dirfd int, path string, flags int) error {
-	if flags&AT_REMOVEDIR == 0 {
-		return errnoErr(path_unlink_file(
-			int32(dirfd),
-			unsafe.StringData(path),
-			size(len(path)),
-		))
-	} else {
-		return errnoErr(path_remove_directory(
-			int32(dirfd),
-			unsafe.StringData(path),
-			size(len(path)),
-		))
-	}
+	return syscall.Unlinkat(dirfd, path, flags)
 }
-
-//go:wasmimport wasi_snapshot_preview1 path_unlink_file
-//go:noescape
-func path_unlink_file(fd int32, path *byte, pathLen size) syscall.Errno
-
-//go:wasmimport wasi_snapshot_preview1 path_remove_directory
-//go:noescape
-func path_remove_directory(fd int32, path *byte, pathLen size) syscall.Errno
 
 func Openat(dirfd int, path string, flags int, perm uint32) (int, error) {
 	return syscall.Openat(dirfd, path, flags, perm)
 }
 
 func Fstatat(dirfd int, path string, stat *syscall.Stat_t, flags int) error {
-	var filestatFlags uint32
-	if flags&AT_SYMLINK_NOFOLLOW == 0 {
-		filestatFlags |= syscall.LOOKUP_SYMLINK_FOLLOW
-	}
-	return errnoErr(path_filestat_get(
-		int32(dirfd),
-		uint32(filestatFlags),
-		unsafe.StringData(path),
-		size(len(path)),
-		unsafe.Pointer(stat),
-	))
+	return syscall.Fstatat(dirfd, path, stat, flags)
 }
-
-//go:wasmimport wasi_snapshot_preview1 path_filestat_get
-//go:noescape
-func path_filestat_get(fd int32, flags uint32, path *byte, pathLen size, buf unsafe.Pointer) syscall.Errno
 
 func Readlinkat(dirfd int, path string, buf []byte) (int, error) {
-	var nwritten size
-	errno := path_readlink(
-		int32(dirfd),
-		unsafe.StringData(path),
-		size(len(path)),
-		&buf[0],
-		size(len(buf)),
-		&nwritten)
-	return int(nwritten), errnoErr(errno)
-
+	return syscall.Readlinkat(dirfd, path, buf)
 }
-
-type (
-	size = uint32
-)
-
-//go:wasmimport wasi_snapshot_preview1 path_readlink
-//go:noescape
-func path_readlink(fd int32, path *byte, pathLen size, buf *byte, bufLen size, nwritten *size) syscall.Errno
 
 func Mkdirat(dirfd int, path string, mode uint32) error {
-	if path == "" {
-		return syscall.EINVAL
-	}
-	return errnoErr(path_create_directory(
-		int32(dirfd),
-		unsafe.StringData(path),
-		size(len(path)),
-	))
+	return syscall.Mkdirat(dirfd, path, mode)
 }
 
-//go:wasmimport wasi_snapshot_preview1 path_create_directory
-//go:noescape
-func path_create_directory(fd int32, path *byte, pathLen size) syscall.Errno
-
 func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
-	// WASI preview 1 doesn't support changing file modes.
-	return syscall.ENOSYS
+	return syscall.Fchmodat(dirfd, path, mode, flags)
 }
 
 func Fchownat(dirfd int, path string, uid, gid int, flags int) error {
-	// WASI preview 1 doesn't support changing file ownership.
+	// Kandelo has no per-file ownership model; report the honest failure.
 	return syscall.ENOSYS
 }
 
 func Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) error {
-	if oldpath == "" || newpath == "" {
-		return syscall.EINVAL
-	}
-	return errnoErr(path_rename(
-		int32(olddirfd),
-		unsafe.StringData(oldpath),
-		size(len(oldpath)),
-		int32(newdirfd),
-		unsafe.StringData(newpath),
-		size(len(newpath)),
-	))
+	return syscall.Renameat(olddirfd, oldpath, newdirfd, newpath)
 }
-
-//go:wasmimport wasi_snapshot_preview1 path_rename
-//go:noescape
-func path_rename(oldFd int32, oldPath *byte, oldPathLen size, newFd int32, newPath *byte, newPathLen size) syscall.Errno
 
 func Linkat(olddirfd int, oldpath string, newdirfd int, newpath string, flag int) error {
-	if oldpath == "" || newpath == "" {
-		return syscall.EINVAL
-	}
-	return errnoErr(path_link(
-		int32(olddirfd),
-		0,
-		unsafe.StringData(oldpath),
-		size(len(oldpath)),
-		int32(newdirfd),
-		unsafe.StringData(newpath),
-		size(len(newpath)),
-	))
+	return syscall.Linkat(olddirfd, oldpath, newdirfd, newpath, flag)
 }
-
-//go:wasmimport wasi_snapshot_preview1 path_link
-//go:noescape
-func path_link(oldFd int32, oldFlags uint32, oldPath *byte, oldPathLen size, newFd int32, newPath *byte, newPathLen size) syscall.Errno
 
 func Symlinkat(oldpath string, newdirfd int, newpath string) error {
-	if oldpath == "" || newpath == "" {
-		return syscall.EINVAL
-	}
-	return errnoErr(path_symlink(
-		unsafe.StringData(oldpath),
-		size(len(oldpath)),
-		int32(newdirfd),
-		unsafe.StringData(newpath),
-		size(len(newpath)),
-	))
-}
-
-//go:wasmimport wasi_snapshot_preview1 path_symlink
-//go:noescape
-func path_symlink(oldPath *byte, oldPathLen size, fd int32, newPath *byte, newPathLen size) syscall.Errno
-
-func errnoErr(errno syscall.Errno) error {
-	if errno == 0 {
-		return nil
-	}
-	return errno
+	return syscall.Symlinkat(oldpath, newdirfd, newpath)
 }
