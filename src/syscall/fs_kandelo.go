@@ -4,12 +4,13 @@
 
 //go:build kandelo
 
-// GOOS=kandelo mirrors the wasip1 syscall surface for milestone 1, but every
-// host syscall backend here is a STUB: the wasip1 //go:wasmimport leaves have
-// been replaced with functions returning ENOSYS (see the one-line bodies
-// below). This lets the syscall package compile for kandelo without importing
-// any host functions. The real Kandelo syscall backend (a host channel
-// handshake) is a later milestone task.
+// GOOS=kandelo mirrors the wasip1 syscall surface, but instead of WASI
+// //go:wasmimport leaves it routes syscalls through the Kandelo channel
+// handshake (kandeloSyscall6 in channel_kandelo.go) using kernel/musl syscall
+// numbers. The fd_* read/write/seek/close/stat leaves and the path-based
+// Open/Openat/Stat/Lstat calls are implemented; some path operations
+// (readdir, and the WASI path_* rights helpers) remain ENOSYS stubs pending
+// later milestones.
 
 package syscall
 
