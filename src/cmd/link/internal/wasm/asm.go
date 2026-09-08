@@ -283,7 +283,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// memory section.
 		writeMemorySec(ctxt, ldr)
 	}
-	writeGlobalSec(ctxt)
+	writeGlobalSec(ctxt, ldr)
 	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
@@ -449,7 +449,7 @@ func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
 }
 
 // writeGlobalSec writes the section that declares global variables.
-func writeGlobalSec(ctxt *ld.Link) {
+func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 	sizeOffset := writeSecHeader(ctxt, sectionGlobal)
 
 	globalRegs := []byte{
@@ -463,7 +463,23 @@ func writeGlobalSec(ctxt *ld.Link) {
 		I32, // 7: PAUSE
 	}
 
-	writeUleb128(ctxt.Out, uint64(len(globalRegs))) // number of globals
+	// GOOS=kandelo synthesizes one extra, exported global, __tls_base (global
+	// index 8), whose constant value is the linear-memory address of the
+	// runtime.kandeloChannelBase data word. The Kandelo host locates this
+	// exported global at instantiation, reads its value as an address, and
+	// stores the syscall-channel offset into linear memory there (see
+	// setupChannelBase in host/src/worker-main.ts). Because we do NOT export
+	// __get_channel_base_addr, the host uses a detected offset of 0, i.e. it
+	// writes at exactly __tls_base. The runtime then reads the channel offset
+	// back from runtime.kandeloChannelBase. The name "__tls_base" mirrors the C
+	// glue's TLS-slot mechanism; here it simply points at a reserved word.
+	numGlobals := len(globalRegs)
+	kandelo := buildcfg.GOOS == "kandelo"
+	if kandelo {
+		numGlobals++
+	}
+
+	writeUleb128(ctxt.Out, uint64(numGlobals)) // number of globals
 
 	for _, typ := range globalRegs {
 		ctxt.Out.WriteByte(typ)
@@ -474,6 +490,21 @@ func writeGlobalSec(ctxt *ld.Link) {
 		case I64:
 			writeI64Const(ctxt.Out, 0)
 		}
+		ctxt.Out.WriteByte(0x0b) // end
+	}
+
+	if kandelo {
+		s := ldr.Lookup("runtime.kandeloChannelBase", 0)
+		if s == 0 {
+			ld.Errorf("GOOS=kandelo: runtime.kandeloChannelBase symbol not defined")
+		}
+		addr := ldr.SymValue(s)
+		if addr <= 0 {
+			ld.Errorf("GOOS=kandelo: runtime.kandeloChannelBase has invalid address %d (symbol dead-code-eliminated?)", addr)
+		}
+		ctxt.Out.WriteByte(I32)               // __tls_base type: i32 (address)
+		ctxt.Out.WriteByte(0x00)              // immutable (const)
+		writeI32Const(ctxt.Out, int32(addr))
 		ctxt.Out.WriteByte(0x0b) // end
 	}
 
@@ -517,11 +548,12 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		ctxt.Out.WriteByte(0x02)      // mem export
 		writeUleb128(ctxt.Out, 0)     // memidx
 	case "kandelo":
-		// Kandelo native module shape: export the runtime entry point and the
-		// __abi_version marker. Linear memory is NOT exported here; it is
-		// imported from env.memory (see writeImportSec). The export count is
-		// entry(1) + WasmExports + __abi_version(1).
-		writeUleb128(ctxt.Out, uint64(2+len(ldr.WasmExports))) // number of exports
+		// Kandelo native module shape: export the runtime entry point, the
+		// __abi_version marker, and the __tls_base global (channel-base
+		// receiver). Linear memory is NOT exported here; it is imported from
+		// env.memory (see writeImportSec). The export count is
+		// entry(1) + WasmExports + __abi_version(1) + __tls_base(1).
+		writeUleb128(ctxt.Out, uint64(3+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
@@ -548,6 +580,13 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__abi_version")             // Kandelo ABI marker
 		ctxt.Out.WriteByte(0x00)                         // func export
 		writeUleb128(ctxt.Out, uint64(abiVersionFuncIdx)) // funcidx
+		// __tls_base global (index 8): the 9 globals are the 8 fixed VM
+		// registers (indices 0-7) plus this synthesized channel-base receiver
+		// appended in writeGlobalSec.
+		const kandeloTLSBaseGlobalIdx = 8
+		writeName(ctxt.Out, "__tls_base") // channel-base receiver
+		ctxt.Out.WriteByte(0x03)          // global export
+		writeUleb128(ctxt.Out, uint64(kandeloTLSBaseGlobalIdx))
 	case "js":
 		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
 		for _, name := range []string{"run", "resume", "getsp"} {

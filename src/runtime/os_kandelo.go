@@ -12,44 +12,57 @@ import "unsafe"
 // runtime OS-layer hooks that the rest of the runtime expects on wasm
 // (exit, write1, usleep, readRandom, goenvs, and the clocks).
 //
-// Every syscall backend here is a STUB for milestone 1: Kandelo does not yet
-// have a host syscall channel (that is a later task). The bodies below are
-// deliberately non-functional and clearly marked. They exist only so the
-// runtime compiles and links for GOOS=kandelo; they do not perform real I/O,
-// timekeeping, or randomness. None of them may call throw, because throw's
-// own diagnostic path calls write1 and exit.
+// The syscall backends route through the Kandelo syscall channel (see
+// channel_kandelo.go) except exit, which the kernel exposes as a function
+// import. None of these hooks may call throw, because throw's own diagnostic
+// path calls write1 and exit.
 
-// exit terminates the process.
+// kernelExit is the kernel-provided process-exit import. Unlike the other
+// syscalls it is a plain wasm function import (the native path the host
+// provides), not a channel syscall, so a terminating exit does not need the
+// channel handshake to complete.
 //
-// STUB: there is no host proc_exit yet. Spin rather than return so callers that
-// treat exit as terminal do not fall through. Do not call throw here.
+//go:wasmimport kernel kernel_exit
+func kernelExit(code int32)
+
+// exit terminates the process via the kernel_exit import. It should not return;
+// the loop is defensive so callers that treat exit as terminal do not fall
+// through if the import ever does. Do not call throw here.
 func exit(code int32) {
+	kernelExit(code)
 	for {
 	}
 }
 
-// write1 writes n bytes from p to the file descriptor fd.
-//
-// STUB: there is no host write backend yet, so output is discarded. It reports
-// n bytes written (never an error) so the runtime's own diagnostic writers do
-// not spin retrying. Must not call throw (throw writes via write1).
+// write1 writes n bytes from p to the file descriptor fd via the channel
+// write(2) syscall. Returns the number of bytes written, or -errno on failure.
+// Must not call throw (throw writes via write1).
 func write1(fd uintptr, p unsafe.Pointer, n int32) int32 {
-	return n
+	ret, errno := doSyscall(sysWrite, int64(fd), int64(uintptr(p)), int64(n))
+	if errno != 0 {
+		return -errno
+	}
+	return int32(ret)
 }
 
 // usleep sleeps for usec microseconds.
 //
-// STUB: no host clock/sleep backend yet; returns immediately.
+// STUB: Kandelo has no channel sleep syscall wired yet; returns immediately.
 func usleep(usec uint32) {
 }
 
-// readRandom fills r with random bytes.
-//
-// STUB: no host entropy source yet. Reports zero bytes read so the runtime
-// falls back to its weak-seed path rather than assuming entropy it does not
-// have.
+// readRandom fills r with random bytes via the channel getrandom(2) syscall.
+// Returns the number of bytes filled, or 0 on failure so the runtime falls back
+// to its weak-seed path rather than assuming entropy it does not have.
 func readRandom(r []byte) int {
-	return 0
+	if len(r) == 0 {
+		return 0
+	}
+	ret, errno := doSyscall(sysGetrandom, int64(uintptr(unsafe.Pointer(&r[0]))), int64(len(r)), 0)
+	if errno != 0 || ret < 0 {
+		return 0
+	}
+	return int(ret)
 }
 
 // goenvs initializes os.Args and the environment.
@@ -60,45 +73,33 @@ func goenvs() {
 	envs = make([]string, 0)
 }
 
-// walltime returns the wall-clock time.
-//
-// STUB: no host clock backend yet; returns the zero time.
+// walltime returns the wall-clock time via CLOCK_REALTIME.
 func walltime() (sec int64, nsec int32) {
 	return walltime1()
 }
 
 func walltime1() (sec int64, nsec int32) {
-	return 0, 0
+	_, errno := doSyscall(sysClockGettime, kandeloClockRealtime,
+		int64(uintptr(unsafe.Pointer(&kandeloTimespec[0]))), 0)
+	if errno != 0 {
+		return 0, 0
+	}
+	return kandeloTimespec[0], int32(kandeloTimespec[1])
 }
 
-// nanotime1 returns a monotonic clock reading in nanoseconds.
+// nanotime1 returns a monotonic clock reading in nanoseconds via
+// CLOCK_MONOTONIC.
 //
-// STUB: no host clock backend yet; returns 0.
+// The clock_gettime call is opaque to the optimizer, so it cannot be
+// constant-folded to zero. That matters because runtime.main throws on a zero
+// nanotime reading, and a folded zero would let the compiler prove throw is
+// always taken and dead-code-eliminate main.main. A real monotonic clock is
+// nonzero and non-decreasing, which the runtime scheduler/GC/timers require.
 func nanotime1() int64 {
-	// STUB: there is no host monotonic clock backend yet. We cannot return a
-	// compile-time constant here for two reasons:
-	//
-	//  1. runtime.main rejects a zero clock reading ("nanotime returning
-	//     zero") via throw, which is noreturn. If the compiler can fold this
-	//     call to the constant 0, it proves that throw is always taken and
-	//     dead-code-eliminates the remainder of runtime.main -- including the
-	//     indirect call to main.main. That silently drops the user program's
-	//     entry point from the linked module. (os_wasip1.go avoids this only
-	//     incidentally, because its nanotime1 calls the clock_time_get
-	//     wasmimport, which the compiler cannot fold.)
-	//
-	//  2. Many parts of the runtime (scheduler, GC, timers) assume a
-	//     monotonically non-decreasing clock.
-	//
-	// Until the host clock backend exists, return a monotonically increasing,
-	// always-nonzero counter. This is not a real clock; it only preserves the
-	// runtime's startup invariants and keeps nanotime opaque to the optimizer.
-	// wasm runs a single M, so a plain increment is race-free here.
-	nanotimeCounter += 1000
-	return int64(nanotimeCounter)
+	_, errno := doSyscall(sysClockGettime, kandeloClockMonotonic,
+		int64(uintptr(unsafe.Pointer(&kandeloTimespec[0]))), 0)
+	if errno != 0 {
+		return 0
+	}
+	return kandeloTimespec[0]*1000000000 + kandeloTimespec[1]
 }
-
-// nanotimeCounter is the backing state for the nanotime1 stub above. It is a
-// package-level variable specifically so the compiler cannot constant-fold
-// nanotime1's result; see the comment in nanotime1.
-var nanotimeCounter uint64 = 1000
