@@ -26,7 +26,11 @@ import "unsafe"
 //
 // kandeloChannelBase is a package-level word so its address is a stable
 // link-time constant the linker can embed in the __tls_base global, and so the
-// symbol stays live (doSyscall reads it).
+// symbol stays live. It is the host's write target and a transient handoff
+// slot, not the value syscalls read directly: at M init kandeloInitChannelBase
+// copies it into the per-M mOS.channelBase, and doSyscall6 reads that per-M
+// copy. kandeloStartHeapAboveChannel still reads this word to detect whether a
+// Kandelo host provisioned the channel at all.
 var kandeloChannelBase uint32
 
 // Channel region layout, offsets relative to the channel base. Must match
@@ -93,9 +97,53 @@ func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret in
 	return doSyscall6(number, a0, a1, a2, a3, a4, a5)
 }
 
+// kandeloInitChannelBase copies this M's syscall-channel base out of the
+// transient handoff word (kandeloChannelBase, at the __tls_base address the
+// host wrote) and into the M's own mOS.channelBase. Each M is a distinct
+// WebAssembly.Instance over the shared linear memory, so kandeloChannelBase is
+// a single shared word the host overwrites for each instance just before it
+// enters; the M must read it immediately and keep its own copy. getg().m is a
+// per-instance value (g is a per-instance wasm global), so this stores into
+// the correct M even though every m struct lives in the shared memory.
+//
+// The main M calls this from osinit. A future thread M will call it from its
+// entry trampoline (wasm_pthread_start) before performing any syscall.
+// Serializing concurrent clones so the handoff word is not clobbered between
+// the host's write and this read is the host's responsibility, handled in a
+// later change; it is not a concern for the single-M path.
+//
+//go:nosplit
+func kandeloInitChannelBase() {
+	getg().m.channelBase = uintptr(kandeloChannelBase)
+}
+
+// wasm_pthread_start is the thread-entry trampoline a future second M will be
+// launched through. It is exported and, being a //go:wasmexport deadcode root,
+// is guaranteed live and present in the module's function table this chunk even
+// though no second M is spawned yet, so the mechanism can be verified now.
+//
+// Next-chunk convention: newosproc takes this function's Go func value, whose
+// code pointer encodes PC_F = funcValueOffset + funcIndex, and passes that
+// PC_F to the host as fnPtr. The host's thread bootstrap calls
+// table.get(fnPtr)() on the exported __indirect_function_table, which lands
+// here on the new M's instance. On entry the host has already written this
+// thread instance's channel offset to the shared kandeloChannelBase word, so
+// the trampoline first copies it into this M's own mOS.channelBase, then hands
+// control to the scheduler's per-M start.
+//
+// It is NOT exercised this chunk (no second M exists); it only has to compile,
+// export, and occupy a table slot. The body is written as the intended entry
+// so the next chunk can point newosproc at it unchanged.
+//
+//go:wasmexport wasm_pthread_start
+func wasm_pthread_start() {
+	kandeloInitChannelBase()
+	mstart()
+}
+
 //go:nosplit
 func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
-	base := uintptr(kandeloChannelBase)
+	base := getg().m.channelBase
 	if base == 0 {
 		// The host has not provisioned the channel base. Fail honestly rather
 		// than scribble on low linear memory; 38 is Linux ENOSYS.

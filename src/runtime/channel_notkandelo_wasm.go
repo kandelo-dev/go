@@ -13,3 +13,11 @@ package runtime
 //
 //go:nosplit
 func kandeloStartHeapAboveChannel() {}
+
+// kandeloInitChannelBase is a no-op on wasm GOOSes other than kandelo (js,
+// wasip1): they have no syscall channel to capture. osinit in os_wasm.go calls
+// this unconditionally; the kandelo build supplies the real implementation in
+// channel_kandelo.go.
+//
+//go:nosplit
+func kandeloInitChannelBase() {}

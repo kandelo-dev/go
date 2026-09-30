@@ -570,11 +570,12 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 	case "kandelo":
 		// Kandelo native module shape: export the runtime entry point, the
 		// __abi_version marker, the __tls_base global (channel-base receiver),
-		// and the __heap_base global (static-data end). Linear memory is NOT
-		// exported here; it is imported from env.memory (see writeImportSec).
+		// the __heap_base global (static-data end), and the single anyfunc
+		// table as __indirect_function_table. Linear memory is NOT exported
+		// here; it is imported from env.memory (see writeImportSec).
 		// The export count is entry(1) + WasmExports + __abi_version(1) +
-		// __tls_base(1) + __heap_base(1).
-		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
+		// __tls_base(1) + __heap_base(1) + __indirect_function_table(1).
+		writeUleb128(ctxt.Out, uint64(5+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
@@ -614,6 +615,16 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__heap_base") // static-data end (channel placement)
 		ctxt.Out.WriteByte(0x03)           // global export
 		writeUleb128(ctxt.Out, uint64(kandeloHeapBaseGlobalIdx))
+		// __indirect_function_table (table index 0): the single anyfunc table
+		// writeTableSec declares and writeElementSec fills. The Kandelo host's
+		// thread bootstrap invokes a new M's entry via table.get(fnPtr)(), where
+		// fnPtr is the PC_F of a Go func value (PC_F = funcValueOffset +
+		// funcIndex); exporting the table is the prerequisite for that call.
+		// It changes nothing at runtime for a single-M process.
+		const kandeloIndirectFuncTableIdx = 0
+		writeName(ctxt.Out, "__indirect_function_table") // thread-entry dispatch
+		ctxt.Out.WriteByte(0x01)                         // table export
+		writeUleb128(ctxt.Out, uint64(kandeloIndirectFuncTableIdx))
 	case "js":
 		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
 		for _, name := range []string{"run", "resume", "getsp"} {

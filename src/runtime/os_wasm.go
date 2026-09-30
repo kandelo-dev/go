@@ -19,6 +19,11 @@ func osinit() {
 	// than treating [firstmoduledata.end, blocMax) as free. No-op on other wasm
 	// GOOSes. See kandeloStartHeapAboveChannel.
 	kandeloStartHeapAboveChannel()
+	// Capture the main M's syscall-channel base from the location the host
+	// wrote it (the kandeloChannelBase word at the __tls_base address) into
+	// this M's own mOS.channelBase, so doSyscall reads a per-M base. No-op on
+	// js/wasip1. See kandeloInitChannelBase in channel_kandelo.go.
+	kandeloInitChannelBase()
 	numCPUStartup = getCPUCount()
 	getg().m.procid = 2
 }
@@ -44,7 +49,15 @@ func sigpanic() {
 // FIXME: wasm doesn't have atomic yet
 func exitThread(wait *atomic.Uint32)
 
-type mOS struct{}
+type mOS struct {
+	// channelBase is this M's base address of the Kandelo syscall channel
+	// region in linear memory. Each M (its own WebAssembly.Instance over the
+	// shared memory) gets its own channel, so the base must be per-M rather
+	// than a single package word. The main M captures it in osinit; a future
+	// thread M captures it in its entry trampoline (see channel_kandelo.go,
+	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
+	channelBase uintptr
+}
 
 func osyield()
 
