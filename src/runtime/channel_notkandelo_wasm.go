@@ -21,3 +21,10 @@ func kandeloStartHeapAboveChannel() {}
 //
 //go:nosplit
 func kandeloInitChannelBase() {}
+
+// newosprocKandelo is only reachable from newosproc's GOOS=="kandelo" branch,
+// which is dead-code-eliminated on js/wasip1. It must still be defined so the
+// package links; it can never be called here.
+func newosprocKandelo(mp *m) {
+	throw("newosprocKandelo: not supported on this GOOS")
+}

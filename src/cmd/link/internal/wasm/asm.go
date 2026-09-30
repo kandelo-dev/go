@@ -266,6 +266,31 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		fns = append(fns, &wasmFunc{Name: "__abi_version", Type: abiType, Code: body.Bytes()})
 	}
 
+	// threadSlotsFuncIdx is the WebAssembly function index of the synthesized
+	// __wasm_posix_thread_slots declaration export (GOOS=kandelo only). Zero
+	// when not emitted.
+	var threadSlotsFuncIdx uint32
+	if buildcfg.GOOS == "kandelo" {
+		// Declare how many concurrent pthread control slots this process needs,
+		// mirroring the C SDK's __wasm_posix_thread_slots export
+		// (libc/glue/channel_syscall.c). The Kandelo host byte-parses this
+		// constant-return export (extractThreadSlotDeclaration in
+		// host/src/constants.ts) to bound the per-process thread-slot pool. A Go
+		// program that can spawn a second M must declare a nonzero, bounded
+		// count so the host does not treat it as single-threaded. Emitted as a
+		// raw `i32.const N; end` body for the same reason as __abi_version: a
+		// normal Go wasm function carries an SP/resume prologue the parser would
+		// reject.
+		const kandeloThreadSlots = 8
+		slotsType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
+		var body bytes.Buffer
+		writeUleb128(&body, 0)                  // local declaration count
+		writeI32Const(&body, kandeloThreadSlots) // i32.const 8
+		body.WriteByte(0x0b)                    // end
+		threadSlotsFuncIdx = uint32(len(hostImports)) + uint32(len(fns))
+		fns = append(fns, &wasmFunc{Name: "__wasm_posix_thread_slots", Type: slotsType, Code: body.Bytes()})
+	}
+
 	ctxt.Out.Write([]byte{0x00, 0x61, 0x73, 0x6d}) // magic
 	ctxt.Out.Write([]byte{0x01, 0x00, 0x00, 0x00}) // version
 
@@ -285,7 +310,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		writeMemorySec(ctxt, ldr)
 	}
 	writeGlobalSec(ctxt, ldr)
-	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx)
+	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
@@ -534,7 +559,7 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
 // The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32) {
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
@@ -574,8 +599,9 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		// table as __indirect_function_table. Linear memory is NOT exported
 		// here; it is imported from env.memory (see writeImportSec).
 		// The export count is entry(1) + WasmExports + __abi_version(1) +
-		// __tls_base(1) + __heap_base(1) + __indirect_function_table(1).
-		writeUleb128(ctxt.Out, uint64(5+len(ldr.WasmExports))) // number of exports
+		// __wasm_posix_thread_slots(1) + __tls_base(1) + __heap_base(1) +
+		// __indirect_function_table(1).
+		writeUleb128(ctxt.Out, uint64(6+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
@@ -602,6 +628,9 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__abi_version")             // Kandelo ABI marker
 		ctxt.Out.WriteByte(0x00)                         // func export
 		writeUleb128(ctxt.Out, uint64(abiVersionFuncIdx)) // funcidx
+		writeName(ctxt.Out, "__wasm_posix_thread_slots")  // pthread slot declaration
+		ctxt.Out.WriteByte(0x00)                          // func export
+		writeUleb128(ctxt.Out, uint64(threadSlotsFuncIdx)) // funcidx
 		// __tls_base global (index 8): the 9 globals are the 8 fixed VM
 		// registers (indices 0-7) plus this synthesized channel-base receiver
 		// appended in writeGlobalSec.

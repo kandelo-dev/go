@@ -129,6 +129,14 @@ func initsig(preinit bool) {
 //
 //go:nowritebarrier
 func newosproc(mp *m) {
+	// GOOS=kandelo spawns a second M as a new WebAssembly.Instance via
+	// kernel_clone (see newosprocKandelo in channel_kandelo.go). GOOS is a
+	// compile-time constant, so this branch is dead-code-eliminated on
+	// js/wasip1, where newosprocKandelo is the throwing stub.
+	if GOOS == "kandelo" {
+		newosprocKandelo(mp)
+		return
+	}
 	throw("newosproc: not implemented")
 }
 

@@ -6,7 +6,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/abi"
+	"unsafe"
+)
 
 // This file implements the Kandelo guest side of the syscall channel: how the
 // runtime learns where the channel region lives in linear memory, and the
@@ -117,28 +120,121 @@ func kandeloInitChannelBase() {
 	getg().m.channelBase = uintptr(kandeloChannelBase)
 }
 
-// wasm_pthread_start is the thread-entry trampoline a future second M will be
-// launched through. It is exported and, being a //go:wasmexport deadcode root,
-// is guaranteed live and present in the module's function table this chunk even
-// though no second M is spawned yet, so the mechanism can be verified now.
+// Second-M spawn (kernel_clone) mechanism
+// ---------------------------------------
+// A Go M on Kandelo is a distinct WebAssembly.Instance sharing the process's
+// linear memory. Spawning one is a three-step handoff:
 //
-// Next-chunk convention: newosproc takes this function's Go func value, whose
-// code pointer encodes PC_F = funcValueOffset + funcIndex, and passes that
-// PC_F to the host as fnPtr. The host's thread bootstrap calls
-// table.get(fnPtr)() on the exported __indirect_function_table, which lands
-// here on the new M's instance. On entry the host has already written this
-// thread instance's channel offset to the shared kandeloChannelBase word, so
-// the trampoline first copies it into this M's own mOS.channelBase, then hands
-// control to the scheduler's per-M start.
+//  1. newosprocKandelo (parent M) writes the new M's g0 pointer and g0 stack
+//     top into the kandeloThreadHandoff* words, then calls kernel_clone with
+//     fnPtr = PC_F of wasmThreadTramp.
+//  2. The Kandelo host allocates a thread slot, instantiates a fresh instance
+//     over the shared memory, writes that slot's syscall-channel offset to the
+//     shared kandeloChannelBase word (host setupChannelBase), and calls
+//     table.get(fnPtr)() on the exported __indirect_function_table.
+//  3. That call lands in wasmThreadTramp on the new instance, whose g and SP
+//     wasm globals are ZERO. The trampoline (asm) installs g and SP from the
+//     handoff words, then calls kandeloThreadEntry.
 //
-// It is NOT exercised this chunk (no second M exists); it only has to compile,
-// export, and occupy a table slot. The body is written as the intended entry
-// so the next chunk can point newosproc at it unchanged.
+// The handoff words are single shared slots, so concurrent spawns must be
+// serialized; kandeloCloneLock does that. For this milestone only one second M
+// is spawned, so a lock held across kernel_clone is sufficient. Full
+// serialization that also covers the asynchronous host-side instance bootstrap
+// (an ack from the child before releasing the handoff) is a follow-up.
+
+// kandeloThreadHandoffG and kandeloThreadHandoffSP carry the new M's g0 pointer
+// and g0 stack top to wasmThreadTramp. They are uint64 so the asm trampoline can
+// load them with a single i64 load before any Go stack or g register exists.
+var (
+	kandeloThreadHandoffG  uint64
+	kandeloThreadHandoffSP uint64
+	kandeloCloneLock       mutex
+)
+
+// Linux thread-clone flags. The Kandelo kernel's sys_clone requires
+// CLONE_VM|CLONE_THREAD to treat the request as a thread rather than a process
+// (crates/runtime-core/src/syscalls.rs). The rest mirror musl's pthread_create
+// clone mask minus the TID/TLS flags: Go does not use C thread-local storage
+// and passes tls/ptid/ctid as 0, so CLONE_SETTLS/CLONE_*_SETTID must stay clear
+// to keep the kernel from dereferencing those null pointers.
+const (
+	_CLONE_VM      = 0x00000100
+	_CLONE_FS      = 0x00000200
+	_CLONE_FILES   = 0x00000400
+	_CLONE_SIGHAND = 0x00000800
+	_CLONE_THREAD  = 0x00010000
+	_CLONE_SYSVSEM = 0x00040000
+)
+
+// kernel_clone spawns a new thread instance. It mirrors the host import used by
+// musl's __clone (libc/musl/src/thread/wasm64posix/clone.c) and the Kandelo host
+// kernel_clone (host/src/worker-main.ts): the host records fnPtr in the channel
+// data area and, after the SYS_CLONE channel transaction returns the new tid,
+// instantiates the thread and calls table.get(fnPtr)(). Returns the child tid,
+// or a negative errno.
 //
-//go:wasmexport wasm_pthread_start
-func wasm_pthread_start() {
+//go:wasmimport kernel kernel_clone
+func kernel_clone(fnPtr, stackPtr, flags, arg, ptid, tls, ctid uint32) int32
+
+// wasmThreadTramp is the fresh-instance thread entry, implemented in
+// atomic_kandelo.s. On entry the g and SP wasm globals are zero; it installs
+// them from the handoff words before running any Go code, then calls
+// kandeloThreadEntry. newosprocKandelo takes its PC_F via abi.FuncPCABI0.
+func wasmThreadTramp()
+
+// kandeloThreadEntry runs on the new M once wasmThreadTramp has installed g and
+// SP. For this mechanics-proof milestone it performs the minimum to prove the
+// spawn, per-M channel base, and memory partition: it captures this instance's
+// syscall-channel base and issues one observable write(2) marker. It does NOT
+// run mstart(); wiring the scheduler across Ms is the follow-up. When it returns
+// the trampoline returns to the host, which publishes the thread's SYS_EXIT and
+// reclaims the slot (host centralizedThreadWorkerMain), so the thread exits
+// cleanly without touching the scheduler.
+//
+//go:nosplit
+func kandeloThreadEntry() {
 	kandeloInitChannelBase()
-	mstart()
+	const msg = "M2 alive via kernel_clone\n"
+	write1(2, unsafe.Pointer(unsafe.StringData(msg)), int32(len(msg)))
+}
+
+// kandeloSpawnProbeM triggers exactly one second-M spawn, independent of the
+// scheduler's Gomaxprocs heuristics, so the clone + instance-bootstrap +
+// per-M-channel mechanics can be exercised deterministically for this milestone.
+// newm allocates a fresh m with its own g0 stack and calls newosproc, which
+// clones a new WebAssembly.Instance and runs wasmThreadTramp on it. Exposed via
+// linkname so a mechanics-proof test program can request the clone directly.
+//
+//go:linkname kandeloSpawnProbeM
+func kandeloSpawnProbeM() {
+	newm(nil, nil, -1)
+}
+
+// newosprocKandelo launches a second M via kernel_clone. mp already has an
+// allocated g0 with a stack (allocm/newm). May run with m.p==nil; must not use
+// write barriers.
+//
+//go:nowritebarrier
+func newosprocKandelo(mp *m) {
+	g0 := mp.g0
+	// PC_F = symbol value >> 16 = funcValueOffset + defined function index. The
+	// host indexes the exported table by this PC_F (writeElementSec fills
+	// table[funcValueOffset+i]=func i), so passing it as fnPtr makes
+	// table.get(fnPtr)() land in wasmThreadTramp. Never hardcode: the index
+	// shifts per build.
+	pcF := uint32(abi.FuncPCABI0(wasmThreadTramp) >> 16)
+	stackHi := uint64(g0.stack.hi)
+
+	lock(&kandeloCloneLock)
+	kandeloThreadHandoffG = uint64(uintptr(unsafe.Pointer(g0)))
+	kandeloThreadHandoffSP = stackHi
+	flags := uint32(_CLONE_VM | _CLONE_FS | _CLONE_FILES | _CLONE_SIGHAND | _CLONE_THREAD | _CLONE_SYSVSEM)
+	ret := kernel_clone(pcF, uint32(stackHi), flags, 0, 0, 0, 0)
+	unlock(&kandeloCloneLock)
+
+	if ret < 0 {
+		throw("newosproc: kernel_clone failed")
+	}
 }
 
 //go:nosplit
