@@ -249,14 +249,15 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// Go wasm function carries an SP/resume prologue the parser would
 		// reject, so the body is emitted directly here.
 		//
-		// 43 is the Kandelo ABI version. It must stay in sync with ABI_VERSION
-		// in the Kandelo repository's crates/shared/src/lib.rs; hardcoded for
-		// now (milestone 1).
-		const kandeloABIVersion = 43
+		// kandeloABIVersion must stay in sync with ABI_VERSION in the Kandelo
+		// repository's crates/shared/src/lib.rs. It is hardcoded here; when
+		// upstream Kandelo bumps ABI_VERSION, bump this to match (the host
+		// hard-rejects a mismatched marker). Last synced: ABI 45.
+		const kandeloABIVersion = 45
 		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
 		writeUleb128(&body, 0)                     // local declaration count
-		writeI32Const(&body, kandeloABIVersion)    // i32.const 43
+		writeI32Const(&body, kandeloABIVersion)    // i32.const 45
 		body.WriteByte(0x0b)                       // end
 		// Module function index: imported functions occupy [0, len(hostImports)),
 		// then the defined functions in fns order. This synthesized function is
