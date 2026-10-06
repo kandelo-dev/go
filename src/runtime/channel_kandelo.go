@@ -8,6 +8,7 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/runtime/atomic"
 	"unsafe"
 )
 
@@ -136,19 +137,19 @@ func kandeloInitChannelBase() {
 //     wasm globals are ZERO. The trampoline (asm) installs g and SP from the
 //     handoff words, then calls kandeloThreadEntry.
 //
-// The handoff words are single shared slots, so concurrent spawns must be
-// serialized; kandeloCloneLock does that. For this milestone only one second M
-// is spawned, so a lock held across kernel_clone is sufficient. Full
-// serialization that also covers the asynchronous host-side instance bootstrap
-// (an ack from the child before releasing the handoff) is a follow-up.
+// The handoff words are single shared slots. kandeloCloneLock serializes
+// current single-M spawns until the child acknowledges that it has consumed
+// g0 and stack top and captured its own channel base. Cross-M contention
+// still needs a real atomic runtime mutex before the full scheduler runs.
 
 // kandeloThreadHandoffG and kandeloThreadHandoffSP carry the new M's g0 pointer
 // and g0 stack top to wasmThreadTramp. They are uint64 so the asm trampoline can
 // load them with a single i64 load before any Go stack or g register exists.
 var (
-	kandeloThreadHandoffG  uint64
-	kandeloThreadHandoffSP uint64
-	kandeloCloneLock       mutex
+	kandeloThreadHandoffG   uint64
+	kandeloThreadHandoffSP  uint64
+	kandeloThreadHandoffAck uint32
+	kandeloCloneLock        mutex
 )
 
 // Linux thread-clone flags. The Kandelo kernel's sys_clone requires
@@ -185,7 +186,8 @@ func wasmThreadTramp()
 // kandeloThreadEntry runs on the new M once wasmThreadTramp has installed g and
 // SP. For this mechanics-proof milestone it performs the minimum to prove the
 // spawn, per-M channel base, and memory partition: it captures this instance's
-// syscall-channel base and issues one observable write(2) marker. It does NOT
+// syscall-channel base, acknowledges the handoff, and issues one observable
+// write(2) marker. It does NOT
 // run mstart(); wiring the scheduler across Ms is the follow-up. When it returns
 // the trampoline returns to the host, which publishes the thread's SYS_EXIT and
 // reclaims the slot (host centralizedThreadWorkerMain), so the thread exits
@@ -194,6 +196,8 @@ func wasmThreadTramp()
 //go:nosplit
 func kandeloThreadEntry() {
 	kandeloInitChannelBase()
+	atomic.Store(&kandeloThreadHandoffAck, 1)
+	atomicNotify(&kandeloThreadHandoffAck, 1)
 	const msg = "M2 alive via kernel_clone\n"
 	write1(2, unsafe.Pointer(unsafe.StringData(msg)), int32(len(msg)))
 }
@@ -228,8 +232,17 @@ func newosprocKandelo(mp *m) {
 	lock(&kandeloCloneLock)
 	kandeloThreadHandoffG = uint64(uintptr(unsafe.Pointer(g0)))
 	kandeloThreadHandoffSP = stackHi
+	atomic.Store(&kandeloThreadHandoffAck, 0)
 	flags := uint32(_CLONE_VM | _CLONE_FS | _CLONE_FILES | _CLONE_SIGHAND | _CLONE_THREAD | _CLONE_SYSVSEM)
 	ret := kernel_clone(pcF, uint32(stackHi), flags, 0, 0, 0, 0)
+	if ret >= 0 {
+		for atomic.Load(&kandeloThreadHandoffAck) == 0 {
+			if atomicWait32(&kandeloThreadHandoffAck, 0, 15_000_000_000) == 2 {
+				unlock(&kandeloCloneLock)
+				throw("newosproc: child bootstrap timed out")
+			}
+		}
+	}
 	unlock(&kandeloCloneLock)
 
 	if ret < 0 {
