@@ -609,7 +609,8 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		// table as __indirect_function_table. Linear memory is NOT exported
 		// here; it is imported from env.memory (see writeImportSec).
 		// The export count is entry(1) + WasmExports + __abi_version(1) +
-		// __wasm_posix_thread_slots(1) + __tls_base(1) + __heap_base(1) +
+		// __wasm_posix_thread_slots(1) + preallocation marker(1) +
+		// __tls_base(1) + __heap_base(1) +
 		// __indirect_function_table(1).
 		writeUleb128(ctxt.Out, uint64(7+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
