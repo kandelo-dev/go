@@ -252,12 +252,12 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// kandeloABIVersion must stay in sync with ABI_VERSION in the Kandelo
 		// repository's crates/shared/src/lib.rs. It is hardcoded here; when
 		// upstream Kandelo bumps ABI_VERSION, bump this to match (the host
-		// hard-rejects a mismatched marker). Last synced: ABI 45.
-		const kandeloABIVersion = 45
+		// hard-rejects a mismatched marker). Last synced: ABI 48.
+		const kandeloABIVersion = 48
 		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
 		writeUleb128(&body, 0)                     // local declaration count
-		writeI32Const(&body, kandeloABIVersion)    // i32.const 45
+		writeI32Const(&body, kandeloABIVersion)    // i32.const 48
 		body.WriteByte(0x0b)                       // end
 		// Module function index: imported functions occupy [0, len(hostImports)),
 		// then the defined functions in fns order. This synthesized function is
@@ -290,6 +290,16 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		threadSlotsFuncIdx = uint32(len(hostImports)) + uint32(len(fns))
 		fns = append(fns, &wasmFunc{Name: "__wasm_posix_thread_slots", Type: slotsType, Code: body.Bytes()})
 	}
+	var preallocateThreadSlotsFuncIdx uint32
+	if buildcfg.GOOS == "kandelo" {
+		markerType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
+		var body bytes.Buffer
+		writeUleb128(&body, 0)
+		writeI32Const(&body, 1)
+		body.WriteByte(0x0b)
+		preallocateThreadSlotsFuncIdx = uint32(len(hostImports)) + uint32(len(fns))
+		fns = append(fns, &wasmFunc{Name: "__wasm_posix_preallocate_thread_slots", Type: markerType, Code: body.Bytes()})
+	}
 
 	ctxt.Out.Write([]byte{0x00, 0x61, 0x73, 0x6d}) // magic
 	ctxt.Out.Write([]byte{0x01, 0x00, 0x00, 0x00}) // version
@@ -310,7 +320,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		writeMemorySec(ctxt, ldr)
 	}
 	writeGlobalSec(ctxt, ldr)
-	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx)
+	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
@@ -559,7 +569,7 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
 // The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32) {
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
@@ -601,7 +611,7 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		// The export count is entry(1) + WasmExports + __abi_version(1) +
 		// __wasm_posix_thread_slots(1) + __tls_base(1) + __heap_base(1) +
 		// __indirect_function_table(1).
-		writeUleb128(ctxt.Out, uint64(6+len(ldr.WasmExports))) // number of exports
+		writeUleb128(ctxt.Out, uint64(7+len(ldr.WasmExports))) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
@@ -631,6 +641,9 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__wasm_posix_thread_slots")  // pthread slot declaration
 		ctxt.Out.WriteByte(0x00)                          // func export
 		writeUleb128(ctxt.Out, uint64(threadSlotsFuncIdx)) // funcidx
+		writeName(ctxt.Out, "__wasm_posix_preallocate_thread_slots")
+		ctxt.Out.WriteByte(0x00)
+		writeUleb128(ctxt.Out, uint64(preallocateThreadSlotsFuncIdx))
 		// __tls_base global (index 8): the 9 globals are the 8 fixed VM
 		// registers (indices 0-7) plus this synthesized channel-base receiver
 		// appended in writeGlobalSec.
