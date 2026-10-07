@@ -2875,7 +2875,7 @@ func newm(fn func(), pp *p, id int64) {
 	mp := allocm(pp, fn, id)
 	mp.nextp.set(pp)
 	mp.sigmask = initSigmask
-	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" {
+	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" && GOOS != "kandelo" {
 		// We're on a locked M or a thread that may have been
 		// started by C. The kernel state of this thread may
 		// be strange (the user may have locked it for that
@@ -5451,8 +5451,8 @@ func Breakpoint() {
 //
 //go:nosplit
 func dolockOSThread() {
-	if GOARCH == "wasm" {
-		return // no threads on wasm yet
+	if GOARCH == "wasm" && GOOS != "kandelo" {
+		return
 	}
 	gp := getg()
 	gp.m.lockedg.set(gp)
@@ -5476,7 +5476,7 @@ func dolockOSThread() {
 //
 //go:nosplit
 func LockOSThread() {
-	if atomic.Load(&newmHandoff.haveTemplateThread) == 0 && GOOS != "plan9" {
+	if atomic.Load(&newmHandoff.haveTemplateThread) == 0 && GOOS != "plan9" && GOOS != "kandelo" {
 		// If we need to start a new thread from the locked
 		// thread, we need the template thread. Start it now
 		// while we're in a known-good state.
@@ -5503,8 +5503,8 @@ func lockOSThread() {
 //
 //go:nosplit
 func dounlockOSThread() {
-	if GOARCH == "wasm" {
-		return // no threads on wasm yet
+	if GOARCH == "wasm" && GOOS != "kandelo" {
+		return
 	}
 	gp := getg()
 	if gp.m.lockedInt != 0 || gp.m.lockedExt != 0 {

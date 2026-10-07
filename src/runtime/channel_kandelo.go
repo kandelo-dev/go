@@ -210,6 +210,12 @@ func kandeloSpawnProbeM() {
 	newm(nil, nil, -1)
 }
 
+//go:linkname kandeloThreadLockState
+func kandeloThreadLockState() bool {
+	gp := getg()
+	return gp.lockedm.ptr() == gp.m && gp.m.lockedg.ptr() == gp
+}
+
 // newosprocKandelo launches a second M via kernel_clone. mp already has an
 // allocated g0 with a stack (allocm/newm). May run with m.p==nil; must not use
 // write barriers.
