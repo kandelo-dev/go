@@ -84,7 +84,11 @@ TEXT runtime·exitThread(SB), NOSPLIT, $0-0
 	UNDEF
 
 TEXT runtime·osyield(SB), NOSPLIT, $0-0
+#ifdef GOOS_kandelo
+	RET
+#else
 	UNDEF
+#endif
 
 TEXT runtime·currentMemory(SB), NOSPLIT, $0
 	Get SP

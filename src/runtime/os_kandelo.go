@@ -17,18 +17,17 @@ import "unsafe"
 // import. None of these hooks may call throw, because throw's own diagnostic
 // path calls write1 and exit.
 
-// kernelExit is the kernel-provided process-exit import. Unlike the other
-// syscalls it is a plain wasm function import (the native path the host
-// provides), not a channel syscall, so a terminating exit does not need the
-// channel handshake to complete.
+// kernelExit is the host's non-returning SYS_EXIT import. A Go process can
+// finish on any M, so exit must commit EXIT_GROUP first; SYS_EXIT alone on a
+// worker channel only terminates that thread.
 //
 //go:wasmimport kernel kernel_exit
 func kernelExit(code int32)
 
-// exit terminates the process via the kernel_exit import. It should not return;
-// the loop is defensive so callers that treat exit as terminal do not fall
-// through if the import ever does. Do not call throw here.
+// exit commits process-wide termination before the non-returning host import.
+// The loop is defensive if that import ever returns. Do not call throw here.
 func exit(code int32) {
+	doSyscall(sysExitGroup, int64(code), 0, 0)
 	kernelExit(code)
 	for {
 	}
@@ -140,12 +139,13 @@ func walltime() (sec int64, nsec int32) {
 }
 
 func walltime1() (sec int64, nsec int32) {
+	timespec := &getg().m.clockTimespec
 	_, errno := doSyscall(sysClockGettime, kandeloClockRealtime,
-		int64(uintptr(unsafe.Pointer(&kandeloTimespec[0]))), 0)
+		int64(uintptr(unsafe.Pointer(&timespec[0]))), 0)
 	if errno != 0 {
 		return 0, 0
 	}
-	return kandeloTimespec[0], int32(kandeloTimespec[1])
+	return timespec[0], int32(timespec[1])
 }
 
 // nanotime1 returns a monotonic clock reading in nanoseconds via
@@ -157,10 +157,11 @@ func walltime1() (sec int64, nsec int32) {
 // always taken and dead-code-eliminate main.main. A real monotonic clock is
 // nonzero and non-decreasing, which the runtime scheduler/GC/timers require.
 func nanotime1() int64 {
+	timespec := &getg().m.clockTimespec
 	_, errno := doSyscall(sysClockGettime, kandeloClockMonotonic,
-		int64(uintptr(unsafe.Pointer(&kandeloTimespec[0]))), 0)
+		int64(uintptr(unsafe.Pointer(&timespec[0]))), 0)
 	if errno != 0 {
 		return 0
 	}
-	return kandeloTimespec[0]*1000000000 + kandeloTimespec[1]
+	return timespec[0]*1000000000 + timespec[1]
 }

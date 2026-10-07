@@ -50,10 +50,10 @@ const (
 
 // ChannelStatus values (crates/shared/src/lib.rs).
 const (
-	chIdle    uint32 = 0
-	chPending uint32 = 1
+	chIdle     uint32 = 0
+	chPending  uint32 = 1
 	chComplete uint32 = 2
-	chError   uint32 = 3
+	chError    uint32 = 3
 )
 
 // Kandelo syscall numbers (the kernel's own numbering).
@@ -61,6 +61,7 @@ const (
 	sysWrite        int32 = 4
 	sysClockGettime int32 = 40
 	sysGetrandom    int32 = 120
+	sysExitGroup    int32 = 387
 )
 
 // Linux-compatible clock ids used by clock_gettime.
@@ -74,11 +75,8 @@ func atomicStore32(addr *uint32, val uint32)
 func atomicNotify(addr *uint32, count uint32) uint32
 func atomicWait32(addr *uint32, expected uint32, timeout int64) uint32
 
-// doSyscall marshals a syscall into the channel region, runs the atomic
-// handshake, and returns the kernel's (return value, errno). It is
-// single-threaded: wasm runs a single M and syscalls are synchronous and
-// non-reentrant, so a shared channel region and shared scratch buffers are
-// safe without locking.
+// doSyscall marshals a syscall into this M's channel region, runs the atomic
+// handshake, and returns the kernel's (return value, errno).
 //
 // The returned errno is the kernel's errno_value slot; ret is meaningful only
 // when errno == 0.
@@ -112,9 +110,7 @@ func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret in
 //
 // The main M calls this from osinit. A future thread M will call it from its
 // entry trampoline (wasm_pthread_start) before performing any syscall.
-// Serializing concurrent clones so the handoff word is not clobbered between
-// the host's write and this read is the host's responsibility, handled in a
-// later change; it is not a concern for the single-M path.
+// The parent holds kandeloCloneLock until this read and the handoff ack.
 //
 //go:nosplit
 func kandeloInitChannelBase() {
@@ -138,9 +134,8 @@ func kandeloInitChannelBase() {
 //     handoff words, then calls kandeloThreadEntry.
 //
 // The handoff words are single shared slots. kandeloCloneLock serializes
-// current single-M spawns until the child acknowledges that it has consumed
-// g0 and stack top and captured its own channel base. Cross-M contention
-// still needs a real atomic runtime mutex before the full scheduler runs.
+// concurrent spawns until the child acknowledges that it has consumed g0 and
+// stack top and captured its own channel base.
 
 // kandeloThreadHandoffG and kandeloThreadHandoffSP carry the new M's g0 pointer
 // and g0 stack top to wasmThreadTramp. They are uint64 so the asm trampoline can
@@ -182,24 +177,25 @@ func kernel_clone(fnPtr, stackPtr, flags, arg, ptid, tls, ctid uint32) int32
 // them from the handoff words before running any Go code, then calls
 // kandeloThreadEntry. newosprocKandelo takes its PC_F via abi.FuncPCABI0.
 func wasmThreadTramp()
+func kandeloStopWasmLoop()
 
 // kandeloThreadEntry runs on the new M once wasmThreadTramp has installed g and
-// SP. For this mechanics-proof milestone it performs the minimum to prove the
-// spawn, per-M channel base, and memory partition: it captures this instance's
-// syscall-channel base, acknowledges the handoff, and issues one observable
-// write(2) marker. It does NOT
-// run mstart(); wiring the scheduler across Ms is the follow-up. When it returns
-// the trampoline returns to the host, which publishes the thread's SYS_EXIT and
-// reclaims the slot (host centralizedThreadWorkerMain), so the thread exits
-// cleanly without touching the scheduler.
+// SP. It captures its channel, acknowledges the handoff, and enters the Go
+// scheduler for an M that owns a P. The no-P path is retained for the explicit
+// clone-mechanics probe.
 //
 //go:nosplit
 func kandeloThreadEntry() {
 	kandeloInitChannelBase()
 	atomic.Store(&kandeloThreadHandoffAck, 1)
 	atomicNotify(&kandeloThreadHandoffAck, 1)
-	const msg = "M2 alive via kernel_clone\n"
-	write1(2, unsafe.Pointer(unsafe.StringData(msg)), int32(len(msg)))
+	if getg().m.nextp == 0 {
+		const msg = "M2 alive via kernel_clone\n"
+		write1(2, unsafe.Pointer(unsafe.StringData(msg)), int32(len(msg)))
+		kandeloStopWasmLoop()
+		return
+	}
+	mstart()
 }
 
 // kandeloSpawnProbeM triggers exactly one second-M spawn, independent of the
@@ -292,11 +288,6 @@ func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno in
 	atomicStore32(statusPtr, chIdle)
 	return ret, errno
 }
-
-// kandeloTimespec mirrors the kernel's struct timespec written by
-// clock_gettime: tv_sec then tv_nsec, both 64-bit. It is package-level so its
-// address is stable across the synchronous syscall (no stack-copy hazard).
-var kandeloTimespec [2]int64
 
 // kandeloStartHeapAboveChannel moves the runtime's break to the top of the
 // initial linear memory the Kandelo host committed, so the Go heap grows

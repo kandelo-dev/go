@@ -71,9 +71,16 @@ TEXT ·wasmThreadTramp(SB), NOSPLIT, $0
 	// Enter Go with a fresh PC_B. wasmThreadTramp carries the default Go wasm
 	// signature (i32 PC_B) -> (i32 unwind flag): the host calls it as
 	// table.get(fnPtr)(0) and reads the i32 result as the thread exit status.
-	// kandeloThreadEntry does not switch goroutines, so it returns 0 (no
-	// unwind); leave that i32 on the stack as this function's result rather than
-	// dropping it, or the module fails validation (result [i32] but got []).
+	// The scheduler may unwind while switching goroutines. Resume the next PC
+	// from the Go stack, just as _rt0_wasm_kandelo does for the main M.
 	I32Const $0
 	Call ·kandeloThreadEntry(SB)
+	Drop
+	Call wasm_pc_f_loop(SB)
+	I32Const $0
 	Return
+
+TEXT ·kandeloStopWasmLoop(SB), NOSPLIT, $0
+	I32Const $1
+	Set PAUSE
+	RET

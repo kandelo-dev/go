@@ -4485,7 +4485,7 @@ func gdestroy(gp *g) {
 
 	dropg()
 
-	if GOARCH == "wasm" { // no threads yet on wasm
+	if GOARCH == "wasm" && GOOS != "kandelo" {
 		gfput(pp, gp)
 		return
 	}

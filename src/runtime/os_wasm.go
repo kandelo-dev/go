@@ -56,7 +56,8 @@ type mOS struct {
 	// than a single package word. The main M captures it in osinit; a future
 	// thread M captures it in its entry trampoline (see channel_kandelo.go,
 	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
-	channelBase uintptr
+	channelBase   uintptr
+	clockTimespec [2]int64
 }
 
 func osyield()
