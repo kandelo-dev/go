@@ -12,6 +12,7 @@ import (
 	"cmd/link/internal/ld"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
+	"flag"
 	"fmt"
 	"internal/abi"
 	"internal/buildcfg"
@@ -43,6 +44,8 @@ const (
 
 // funcValueOffset is the offset between the PC_F value of a function and the index of the function in WebAssembly
 const funcValueOffset = 0x1000 // TODO(neelance): make function addresses play nice with heap addresses
+
+var kandeloThreadSlots = flag.Int("kandelothreadslots", 32, "number of preallocated Kandelo pthread slots")
 
 func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 }
@@ -281,12 +284,14 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// raw `i32.const N; end` body for the same reason as __abi_version: a
 		// normal Go wasm function carries an SP/resume prologue the parser would
 		// reject.
-		const kandeloThreadSlots = 8
+		if *kandeloThreadSlots < 1 || *kandeloThreadSlots > 1024 {
+			ld.Exitf("-kandelothreadslots must be between 1 and 1024")
+		}
 		slotsType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
-		writeUleb128(&body, 0)                  // local declaration count
-		writeI32Const(&body, kandeloThreadSlots) // i32.const 8
-		body.WriteByte(0x0b)                    // end
+		writeUleb128(&body, 0) // local declaration count
+		writeI32Const(&body, int32(*kandeloThreadSlots))
+		body.WriteByte(0x0b) // end
 		threadSlotsFuncIdx = uint32(len(hostImports)) + uint32(len(fns))
 		fns = append(fns, &wasmFunc{Name: "__wasm_posix_thread_slots", Type: slotsType, Code: body.Bytes()})
 	}
