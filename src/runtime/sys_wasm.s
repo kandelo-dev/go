@@ -80,7 +80,11 @@ TEXT runtime·wasmTruncU(SB), NOSPLIT, $0-0
 	I64TruncF64U
 	Return
 
-TEXT runtime·exitThread(SB), NOSPLIT, $0-0
+TEXT runtime·exitThread(SB), NOSPLIT, $0-8
+#ifdef GOOS_kandelo
+	I32Const $0
+	Call runtime·kernelThreadExit(SB)
+#endif
 	UNDEF
 
 TEXT runtime·osyield(SB), NOSPLIT, $0-0

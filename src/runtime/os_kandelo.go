@@ -24,6 +24,9 @@ import "unsafe"
 //go:wasmimport kernel kernel_exit
 func kernelExit(code int32)
 
+//go:wasmimport kernel kernel_thread_exit
+func kernelThreadExit(wait unsafe.Pointer)
+
 // exit commits process-wide termination before the non-returning host import.
 // The loop is defensive if that import ever returns. Do not call throw here.
 func exit(code int32) {
