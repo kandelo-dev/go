@@ -25,35 +25,45 @@ func kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, err
 // (enum Syscall / mod extended_syscalls) and the musl overlay's bits/syscall.h;
 // they are the kernel's own numbering, not the classic Linux amd64 numbers.
 const (
-	kSysOpen     int32 = 1
-	kSysClose    int32 = 2
-	kSysRead     int32 = 3
-	kSysWrite    int32 = 4
-	kSysLseek    int32 = 5
-	kSysFstat    int32 = 6
-	kSysStat     int32 = 11
-	kSysChmod    int32 = 20
-	kSysGetcwd   int32 = 23
-	kSysChdir    int32 = 24
-	kSysIsatty   int32 = 42
-	kSysPread    int32 = 64
-	kSysPwrite   int32 = 65
-	kSysOpenat   int32 = 69
-	kSysFtruncate int32 = 79
-	kSysFsync    int32 = 80
-	kSysTruncate int32 = 85
-	kSysFchmod   int32 = 87
-	kSysFstatat  int32 = 93
-	kSysUnlinkat int32 = 94
-	kSysMkdirat  int32 = 95
-	kSysRenameat int32 = 96
-	kSysFchmodat int32 = 98
-	kSysLinkat   int32 = 100
-	kSysSymlinkat int32 = 101
-	kSysReadlinkat int32 = 102
-	kSysGetrandom int32 = 120
-	kSysUtimensat int32 = 125
-	kSysFchdir   int32 = 127
+	kSysOpen        int32 = 1
+	kSysClose       int32 = 2
+	kSysRead        int32 = 3
+	kSysWrite       int32 = 4
+	kSysLseek       int32 = 5
+	kSysFstat       int32 = 6
+	kSysStat        int32 = 11
+	kSysChmod       int32 = 20
+	kSysGetcwd      int32 = 23
+	kSysChdir       int32 = 24
+	kSysIsatty      int32 = 42
+	kSysSocket      int32 = 50
+	kSysBind        int32 = 51
+	kSysListen      int32 = 52
+	kSysAccept      int32 = 53
+	kSysConnect     int32 = 54
+	kSysShutdown    int32 = 57
+	kSysGetsockopt  int32 = 58
+	kSysSetsockopt  int32 = 59
+	kSysPread       int32 = 64
+	kSysPwrite      int32 = 65
+	kSysOpenat      int32 = 69
+	kSysFtruncate   int32 = 79
+	kSysFsync       int32 = 80
+	kSysTruncate    int32 = 85
+	kSysFchmod      int32 = 87
+	kSysFstatat     int32 = 93
+	kSysUnlinkat    int32 = 94
+	kSysMkdirat     int32 = 95
+	kSysRenameat    int32 = 96
+	kSysFchmodat    int32 = 98
+	kSysLinkat      int32 = 100
+	kSysSymlinkat   int32 = 101
+	kSysReadlinkat  int32 = 102
+	kSysGetsockname int32 = 114
+	kSysGetpeername int32 = 115
+	kSysGetrandom   int32 = 120
+	kSysUtimensat   int32 = 125
+	kSysFchdir      int32 = 127
 )
 
 // kAtFdcwd is the dirfd sentinel meaning "resolve relative to the current

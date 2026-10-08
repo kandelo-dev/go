@@ -4,7 +4,7 @@
 
 // Fake networking for js/wasm and wasip1/wasm.
 
-//go:build js || wasip1 || kandelo
+//go:build js || wasip1
 
 package syscall
 
