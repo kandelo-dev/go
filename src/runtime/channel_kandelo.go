@@ -189,7 +189,7 @@ func kandeloThreadEntry() {
 	kandeloInitChannelBase()
 	atomic.Store(&kandeloThreadHandoffAck, 1)
 	atomicNotify(&kandeloThreadHandoffAck, 1)
-	if getg().m.nextp == 0 {
+	if getg().m.nextp == 0 && getg().m.mstartfn == nil {
 		const msg = "M2 alive via kernel_clone\n"
 		write1(2, unsafe.Pointer(unsafe.StringData(msg)), int32(len(msg)))
 		kandeloStopWasmLoop()

@@ -47,10 +47,11 @@ func write1(fd uintptr, p unsafe.Pointer, n int32) int32 {
 	return int32(ret)
 }
 
-// usleep sleeps for usec microseconds.
-//
-// STUB: Kandelo has no channel sleep syscall wired yet; returns immediately.
+var kandeloSleepWord uint32
+
+//go:nosplit
 func usleep(usec uint32) {
+	atomicWait32(&kandeloSleepWord, 0, int64(usec)*1000)
 }
 
 // readRandom fills r with random bytes via the channel getrandom(2) syscall.

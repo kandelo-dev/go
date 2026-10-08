@@ -164,7 +164,7 @@ type gsignalStack struct{}
 const preemptMSupported = false
 
 func preemptM(mp *m) {
-	// No threads, so nothing to do.
+	// Wasm has no asynchronous preemption signal path.
 }
 
 // getfp returns the frame pointer register of its caller or 0 if not implemented.

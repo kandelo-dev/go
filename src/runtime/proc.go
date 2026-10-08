@@ -6219,8 +6219,8 @@ var needSysmonWorkaround bool = false
 
 // haveSysmon indicates whether there is sysmon thread support.
 //
-// No threads on wasm yet, so no sysmon.
-const haveSysmon = GOARCH != "wasm"
+// Kandelo supports threads on wasm; js and wasip1 do not.
+const haveSysmon = GOARCH != "wasm" || GOOS == "kandelo"
 
 // Always runs without a P, so write barriers are not allowed.
 //
