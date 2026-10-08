@@ -393,16 +393,22 @@ type fdstat struct {
 }
 
 // fd_fdstat_get synthesizes a WASI-style fdstat from the kernel. Kandelo has no
-// single fdstat syscall, so the file type comes from fstat(2) and the flags are
-// reported as zero (the channel is synchronous/blocking). Returning success
-// keeps the os package's stdio setup and file-type queries working.
+// single fdstat syscall, so the file type comes from fstat(2) and the
+// nonblocking flag comes from fcntl(2).
 func fd_fdstat_get(fd int32, buf *fdstat) Errno {
 	var st Stat_t
 	if errno := fd_filestat_get(fd, unsafe.Pointer(&st)); errno != 0 {
 		return errno
 	}
 	buf.filetype = st.Filetype
+	flags, errno := kandeloSyscall6(kSysFcntl, int64(fd), F_GETFL, 0, 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
 	buf.fdflags = 0
+	if flags&O_NONBLOCK != 0 {
+		buf.fdflags |= FDFLAG_NONBLOCK
+	}
 	buf.rightsBase = fullRights
 	buf.rightsInheriting = fullRights
 	return 0
@@ -417,6 +423,14 @@ func fd_fdstat_get_flags(fd int) (uint32, error) {
 	var stat fdstat
 	errno := fd_fdstat_get(int32(fd), &stat)
 	return uint32(stat.fdflags), errnoErr(errno)
+}
+
+func Fcntl(fd int, cmd int, arg int) (int, error) {
+	ret, errno := kandeloSyscall6(kSysFcntl, int64(fd), int64(cmd), int64(arg), 0, 0, 0)
+	if errno != 0 {
+		return 0, kandeloErrno(errno)
+	}
+	return int(ret), nil
 }
 
 // fd_fdstat_get_type is accessed from net

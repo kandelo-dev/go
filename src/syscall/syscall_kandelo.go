@@ -232,7 +232,8 @@ const (
 	O_DIRECTORY = 020000
 	O_NOFOLLOW  = 0400
 
-	O_CLOEXEC = 0
+	O_CLOEXEC  = 0
+	O_NONBLOCK = 0o4000
 )
 
 const (
@@ -473,17 +474,17 @@ const (
 func clock_time_get(id clockid, precision timestamp, time *timestamp) Errno { return ENOSYS }
 
 func SetNonblock(fd int, nonblocking bool) error {
-	flags, err := fd_fdstat_get_flags(fd)
+	flags, err := Fcntl(fd, F_GETFL, 0)
 	if err != nil {
 		return err
 	}
 	if nonblocking {
-		flags |= FDFLAG_NONBLOCK
+		flags |= O_NONBLOCK
 	} else {
-		flags &^= FDFLAG_NONBLOCK
+		flags &^= O_NONBLOCK
 	}
-	errno := fd_fdstat_set_flags(int32(fd), flags)
-	return errnoErr(errno)
+	_, err = Fcntl(fd, F_SETFL, flags)
+	return err
 }
 
 type Rlimit struct {

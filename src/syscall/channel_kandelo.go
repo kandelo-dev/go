@@ -29,6 +29,7 @@ const (
 	kSysClose       int32 = 2
 	kSysRead        int32 = 3
 	kSysWrite       int32 = 4
+	kSysFcntl       int32 = 10
 	kSysLseek       int32 = 5
 	kSysFstat       int32 = 6
 	kSysStat        int32 = 11

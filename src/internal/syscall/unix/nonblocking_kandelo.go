@@ -6,26 +6,16 @@
 
 package unix
 
-import (
-	"syscall"
-	_ "unsafe" // for go:linkname
-)
+import "syscall"
 
 func IsNonblock(fd int) (nonblocking bool, err error) {
-	flags, e1 := fd_fdstat_get_flags(fd)
-	if e1 != nil {
-		return false, e1
+	flags, err := syscall.Fcntl(fd, syscall.F_GETFL, 0)
+	if err != nil {
+		return false, err
 	}
-	return flags&syscall.FDFLAG_NONBLOCK != 0, nil
+	return flags&syscall.O_NONBLOCK != 0, nil
 }
 
 func HasNonblockFlag(flag int) bool {
-	return flag&syscall.FDFLAG_NONBLOCK != 0
+	return flag&syscall.O_NONBLOCK != 0
 }
-
-// This helper is implemented in the syscall package. It means we don't have
-// to redefine the fd_fdstat_get host import or the fdstat struct it
-// populates.
-//
-//go:linkname fd_fdstat_get_flags syscall.fd_fdstat_get_flags
-func fd_fdstat_get_flags(fd int) (uint32, error)
