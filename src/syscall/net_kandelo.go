@@ -185,6 +185,20 @@ func SetsockoptInt(fd, level, opt int, value int) error {
 	return errnoErr(kandeloErrno(errno))
 }
 
+func SetsockoptLinger(fd, level, opt int, value *Linger) error {
+	if value == nil {
+		return EINVAL
+	}
+	_, errno := kandeloSyscall6(kSysSetsockopt, int64(fd), int64(level), int64(opt), int64(uintptr(unsafe.Pointer(value))), int64(unsafe.Sizeof(*value)), 0)
+	runtime.KeepAlive(value)
+	return errnoErr(kandeloErrno(errno))
+}
+
+func SetsockoptInet4Addr(fd, level, opt int, value [4]byte) error {
+	_, errno := kandeloSyscall6(kSysSetsockopt, int64(fd), int64(level), int64(opt), int64(uintptr(unsafe.Pointer(&value[0]))), int64(len(value)), 0)
+	return errnoErr(kandeloErrno(errno))
+}
+
 func SetReadDeadline(fd int, t int64) error {
 	return ENOSYS
 }
