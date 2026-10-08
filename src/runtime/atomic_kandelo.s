@@ -32,7 +32,7 @@ TEXT ·atomicNotify(SB), NOSPLIT, $0-20
 
 // func atomicWait32(addr *uint32, expected uint32, timeout int64) uint32
 // memory.atomic.wait32: (i32 addr, i32 expected, i64 timeout) -> i32
-TEXT ·atomicWait32(SB), NOSPLIT, $0-32
+TEXT ·atomicWait32(SB), NOSPLIT, $0-28
 	Get SP                 // result store base
 	I32Load addr+0(FP)     // push address
 	I32Load expected+8(FP) // push expected

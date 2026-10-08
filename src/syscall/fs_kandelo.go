@@ -363,11 +363,22 @@ func path_open(rootFD int32, dirflags lookupflags, path *byte, pathLen size, ofl
 }
 
 func random_get(buf *byte, bufLen size) Errno {
-	if bufLen == 0 {
-		return 0
+	for filled := size(0); filled < bufLen; {
+		ret, errno := kandeloSyscall6(kSysGetrandom,
+			int64(uintptr(unsafe.Pointer(buf))+uintptr(filled)),
+			int64(bufLen-filled), 0, 0, 0, 0)
+		if errno != 0 {
+			if kandeloErrno(errno) == EINTR {
+				continue
+			}
+			return kandeloErrno(errno)
+		}
+		if ret <= 0 || ret > int64(bufLen-filled) {
+			return EIO
+		}
+		filled += size(ret)
 	}
-	_, errno := kandeloSyscall6(kSysGetrandom, int64(uintptr(unsafe.Pointer(buf))), int64(bufLen), 0, 0, 0, 0)
-	return kandeloErrno(errno)
+	return 0
 }
 
 // https://github.com/WebAssembly/WASI/blob/a2b96e81c0586125cc4dc79a5be0b78d9a059925/legacy/preview1/docs.md#-fdstat-record
@@ -397,11 +408,7 @@ func fd_fdstat_get(fd int32, buf *fdstat) Errno {
 	return 0
 }
 
-// fd_fdstat_set_flags is a no-op success. The Kandelo syscall channel is
-// synchronous and blocking, so non-blocking flag changes have no backing
-// mechanism; reporting success lets os.NewFile proceed without treating stdio
-// setup as a hard failure.
-func fd_fdstat_set_flags(fd int32, flags fdflags) Errno { return 0 }
+func fd_fdstat_set_flags(fd int32, flags fdflags) Errno { return ENOSYS }
 
 // fd_fdstat_get_flags is accessed from internal/syscall/unix
 //go:linkname fd_fdstat_get_flags
