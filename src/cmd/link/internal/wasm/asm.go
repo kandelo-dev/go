@@ -189,17 +189,35 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	var buildid []byte
 	fns := make([]*wasmFunc, len(ctxt.Textp))
 	hostFunctionIndices := make(map[string]uint32)
+	hasMemoryBase := false
 	for _, fn := range ctxt.Textp {
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
 			if _, exists := hostFunctionIndices[host.Function.Name]; exists {
 				ld.Exitf("duplicate Wasm host function name %s", host.Function.Name)
 			}
 			hostFunctionIndices[host.Function.Name] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
+			for _, relocation := range host.Object.CodeRelocations {
+				if relocation.Type == 7 && relocation.Symbol.Name == "__memory_base" {
+					hasMemoryBase = true
+				}
+			}
 		}
 	}
 	for i, fn := range ctxt.Textp {
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
-			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, nil)
+			globalIndices := make(map[string]uint32)
+			if hasMemoryBase {
+				globalIndices["__memory_base"] = 10
+			}
+			memoryAddresses := make(map[string]uint32)
+			for name, symbol := range host.DataSymbols {
+				address := ldr.SymValue(symbol)
+				if address < 0 || address > 1<<32-1 {
+					ld.Exitf("Wasm data symbol %s has invalid address %d", name, address)
+				}
+				memoryAddresses[name] = uint32(address)
+			}
+			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses)
 			if err != nil {
 				ld.Exitf("Wasm host function %s: %v", host.Function.Name, err)
 			}
@@ -342,7 +360,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// memory section.
 		writeMemorySec(ctxt, ldr)
 	}
-	writeGlobalSec(ctxt, ldr)
+	writeGlobalSec(ctxt, ldr, hasMemoryBase)
 	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
@@ -508,7 +526,7 @@ func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
 }
 
 // writeGlobalSec writes the section that declares global variables.
-func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
+func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase bool) {
 	sizeOffset := writeSecHeader(ctxt, sectionGlobal)
 
 	globalRegs := []byte{
@@ -538,6 +556,9 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 		// Two synthesized globals: __tls_base (channel-base receiver, index 8)
 		// and __heap_base (static-data end, index 9). See below.
 		numGlobals += 2
+		if hasMemoryBase {
+			numGlobals++
+		}
 	}
 
 	writeUleb128(ctxt.Out, uint64(numGlobals)) // number of globals
@@ -584,6 +605,13 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 		ctxt.Out.WriteByte(0x00) // immutable (const)
 		writeI32Const(ctxt.Out, dataEnd)
 		ctxt.Out.WriteByte(0x0b) // end
+
+		if hasMemoryBase {
+			ctxt.Out.WriteByte(I32)
+			ctxt.Out.WriteByte(0x01)
+			writeI32Const(ctxt.Out, 0)
+			ctxt.Out.WriteByte(0x0b)
+		}
 	}
 
 	writeSecSize(ctxt, sizeOffset)

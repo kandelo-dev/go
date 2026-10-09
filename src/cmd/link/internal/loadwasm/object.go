@@ -13,16 +13,27 @@ type Section struct {
 }
 
 type Symbol struct {
-	Kind  byte
-	Flags uint32
-	Index uint32
-	Name  string
+	Kind   byte
+	Flags  uint32
+	Index  uint32
+	Name   string
+	Offset uint32
+	Size   uint32
 }
 
 type Relocation struct {
 	Type   byte
 	Offset uint32
 	Symbol Symbol
+	Addend int32
+}
+
+type DataSegment struct {
+	Name    string
+	Address uint32
+	Data    []byte
+	Align   uint32
+	Flags   uint32
 }
 
 type FuncType struct {
@@ -44,6 +55,7 @@ type Object struct {
 	CodeRelocations []Relocation
 	Types           []FuncType
 	Functions       []Function
+	DataSegments    []DataSegment
 }
 
 type reader struct {
@@ -67,6 +79,27 @@ func (input *reader) unsigned() (uint32, error) {
 	}
 	input.offset += size
 	return uint32(value), nil
+}
+
+func (input *reader) signed() (int32, error) {
+	var value int64
+	for shift := uint(0); shift < 35; shift += 7 {
+		current, err := input.byte()
+		if err != nil {
+			return 0, err
+		}
+		value |= int64(current&0x7f) << shift
+		if current&0x80 == 0 {
+			if current&0x40 != 0 {
+				value |= ^int64(0) << (shift + 7)
+			}
+			if value < -1<<31 || value > 1<<31-1 {
+				return 0, fmt.Errorf("Wasm signed integer out of range")
+			}
+			return int32(value), nil
+		}
+	}
+	return 0, fmt.Errorf("invalid Wasm signed integer")
 }
 
 func (input *reader) bytes() ([]byte, error) {
@@ -220,10 +253,10 @@ func symbolTable(data []byte, sections []Section, imported map[byte][]string) ([
 				symbol.Name, err = subsection.name()
 				if err == nil && symbol.Flags&0x10 == 0 {
 					if symbol.Index, err = subsection.unsigned(); err == nil {
-						_, err = subsection.unsigned()
+						symbol.Offset, err = subsection.unsigned()
 					}
 					if err == nil {
-						_, err = subsection.unsigned()
+						symbol.Size, err = subsection.unsigned()
 					}
 				}
 			case 3:
@@ -246,6 +279,91 @@ func symbolTable(data []byte, sections []Section, imported map[byte][]string) ([
 		}
 	}
 	return symbols, nil
+}
+
+func dataSegments(data []byte) ([]DataSegment, error) {
+	input := reader{data: data}
+	count, err := input.unsigned()
+	if err != nil || uint64(count) > uint64(len(data)) {
+		return nil, fmt.Errorf("invalid Wasm data segment count")
+	}
+	segments := make([]DataSegment, count)
+	for index := range segments {
+		mode, err := input.unsigned()
+		if err != nil {
+			return nil, err
+		}
+		switch mode {
+		case 0:
+		case 2:
+			memoryIndex, err := input.unsigned()
+			if err != nil || memoryIndex != 0 {
+				return nil, fmt.Errorf("unsupported Wasm data memory index %d", memoryIndex)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported Wasm data segment mode %d", mode)
+		}
+		opcode, err := input.byte()
+		if err != nil || opcode != 0x41 {
+			return nil, fmt.Errorf("unsupported Wasm data offset expression")
+		}
+		address, err := input.signed()
+		if err != nil || address < 0 {
+			return nil, fmt.Errorf("invalid Wasm data offset")
+		}
+		end, err := input.byte()
+		if err != nil || end != 0x0b {
+			return nil, fmt.Errorf("invalid Wasm data offset expression end")
+		}
+		segments[index].Address = uint32(address)
+		segments[index].Align = 1
+		if segments[index].Data, err = input.bytes(); err != nil {
+			return nil, err
+		}
+	}
+	return segments, input.done()
+}
+
+func segmentInfo(data []byte, segments []DataSegment) error {
+	input := reader{data: data}
+	version, err := input.unsigned()
+	if err != nil || version != 2 {
+		return fmt.Errorf("unsupported Wasm linking version %d", version)
+	}
+	for input.offset < len(input.data) {
+		kind, err := input.byte()
+		if err != nil {
+			return err
+		}
+		subsection, err := input.section()
+		if err != nil {
+			return err
+		}
+		if kind != 5 {
+			continue
+		}
+		count, err := subsection.unsigned()
+		if err != nil || int(count) != len(segments) {
+			return fmt.Errorf("Wasm segment info count does not match data segments")
+		}
+		for index := range segments {
+			if segments[index].Name, err = subsection.name(); err != nil {
+				return err
+			}
+			exponent, err := subsection.unsigned()
+			if err != nil || exponent > 30 {
+				return fmt.Errorf("invalid Wasm data segment alignment")
+			}
+			segments[index].Align = 1 << exponent
+			if segments[index].Flags, err = subsection.unsigned(); err != nil {
+				return err
+			}
+		}
+		if err = subsection.done(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func codeRelocations(data []byte, sections []Section, symbols []Symbol) ([]Relocation, error) {
@@ -280,8 +398,13 @@ func codeRelocations(data []byte, sections []Section, symbols []Symbol) ([]Reloc
 		relocation.Symbol = symbols[symbolIndex]
 		switch relocation.Type {
 		case 0, 7, 12:
+		case 3, 4, 5, 11:
+			relocation.Addend, err = input.signed()
 		default:
 			return nil, fmt.Errorf("unsupported Wasm CODE relocation type %d", relocation.Type)
+		}
+		if err != nil {
+			return nil, err
 		}
 		result = append(result, relocation)
 	}
@@ -374,7 +497,7 @@ func definedFunctions(typeData, codeData []byte, types []FuncType, symbols []Sym
 	return functions, nil
 }
 
-func (object *Object) RelocateFunction(function Function, functionIndices, globalIndices map[string]uint32) ([]byte, error) {
+func (object *Object) RelocateFunction(function Function, functionIndices, globalIndices, memoryAddresses map[string]uint32) ([]byte, error) {
 	result := append([]byte(nil), function.Body...)
 	for _, relocation := range object.CodeRelocations {
 		if relocation.Offset < function.BodyOffset || uint64(relocation.Offset) >= uint64(function.BodyOffset)+uint64(len(result)) {
@@ -387,6 +510,8 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 			target, ok = functionIndices[relocation.Symbol.Name]
 		case 7:
 			target, ok = globalIndices[relocation.Symbol.Name]
+		case 3, 4, 5, 11:
+			target, ok = memoryAddresses[relocation.Symbol.Name]
 		default:
 			return nil, fmt.Errorf("unsupported Wasm function relocation type %d for %s", relocation.Type, function.Name)
 		}
@@ -395,9 +520,39 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 		}
 		offset := int(relocation.Offset - function.BodyOffset)
 		_, width := binary.Uvarint(result[offset:])
+		if relocation.Type == 5 {
+			width = 4
+		}
 		if width <= 0 || width > 5 || offset+width > len(result) {
 			return nil, fmt.Errorf("invalid Wasm relocation width for %s", relocation.Symbol.Name)
 		}
+		value := int64(target) + int64(relocation.Addend)
+		if relocation.Type == 4 || relocation.Type == 11 {
+			if value < -1<<31 || value > 1<<31-1 {
+				return nil, fmt.Errorf("Wasm memory address out of range for %s", relocation.Symbol.Name)
+			}
+			var encoded byte
+			for index := 0; index < width; index++ {
+				encoded = byte(value & 0x7f)
+				value >>= 7
+				if index < width-1 {
+					encoded |= 0x80
+				}
+				result[offset+index] = encoded
+			}
+			if (value != 0 || encoded&0x40 != 0) && (value != -1 || encoded&0x40 == 0) {
+				return nil, fmt.Errorf("Wasm memory address exceeds encoded width for %s", relocation.Symbol.Name)
+			}
+			continue
+		}
+		if value < 0 || value > 1<<32-1 {
+			return nil, fmt.Errorf("Wasm relocation value out of range for %s", relocation.Symbol.Name)
+		}
+		if relocation.Type == 5 {
+			binary.LittleEndian.PutUint32(result[offset:], uint32(value))
+			continue
+		}
+		target = uint32(value)
 		for index := 0; index < width; index++ {
 			value := byte(target & 0x7f)
 			target >>= 7
@@ -442,6 +597,7 @@ func Parse(data []byte) (*Object, error) {
 	var typeSection []byte
 	var functionSection []byte
 	var codeSection []byte
+	var dataSection []byte
 	var linking []byte
 	var relocCode []byte
 	for _, section := range object.Sections {
@@ -458,6 +614,8 @@ func Parse(data []byte) (*Object, error) {
 			functionSection = section.Data
 		case section.ID == 10:
 			codeSection = section.Data
+		case section.ID == 11:
+			dataSection = section.Data
 		case section.Name == "linking":
 			linking = section.Data
 		case section.Name == "reloc.CODE":
@@ -468,9 +626,26 @@ func Parse(data []byte) (*Object, error) {
 		return nil, fmt.Errorf("Wasm object has no linking section")
 	}
 	var err error
+	if dataSection != nil {
+		object.DataSegments, err = dataSegments(dataSection)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err = segmentInfo(linking, object.DataSegments); err != nil {
+		return nil, err
+	}
 	object.Symbols, err = symbolTable(linking, object.Sections, imported)
 	if err != nil {
 		return nil, err
+	}
+	for _, symbol := range object.Symbols {
+		if symbol.Kind != 1 || symbol.Flags&0x10 != 0 {
+			continue
+		}
+		if int(symbol.Index) >= len(object.DataSegments) || uint64(symbol.Offset)+uint64(symbol.Size) > uint64(len(object.DataSegments[symbol.Index].Data)) {
+			return nil, fmt.Errorf("Wasm data symbol %s is outside its segment", symbol.Name)
+		}
 	}
 	if relocCode != nil {
 		object.CodeRelocations, err = codeRelocations(relocCode, object.Sections, object.Symbols)

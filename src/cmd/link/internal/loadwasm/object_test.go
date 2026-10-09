@@ -1,6 +1,7 @@
 package loadwasm
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"strings"
@@ -49,6 +50,63 @@ func testObjectWithRelocation(kind byte) []byte {
 	return appendSection(data, 0, append(appendName(nil, "reloc.CODE"), relocations...))
 }
 
+func testObjectWithData() []byte {
+	data := []byte("\x00asm\x01\x00\x00\x00")
+	data = appendSection(data, 1, []byte{1, 0x60, 0, 0})
+	data = appendSection(data, 3, []byte{1, 0})
+	data = appendSection(data, 10, []byte{1, 9, 0, 0x41, 0x80, 0x80, 0x80, 0x80, 0, 0x1a, 0x0b})
+	data = appendSection(data, 11, []byte{1, 0, 0x41, 0, 0x0b, 4, 't', 'e', 's', 't'})
+	segment := appendName([]byte{1}, ".rodata")
+	segment = append(segment, 2, 0)
+	symbols := appendName([]byte{2, 0, 0, 0}, "local")
+	symbols = appendName(append(symbols, 1, 2), "message")
+	symbols = append(symbols, 0, 0, 4)
+	linking := appendUnsigned(nil, 2)
+	linking = append(linking, 5)
+	linking = appendUnsigned(linking, uint64(len(segment)))
+	linking = append(linking, segment...)
+	linking = append(linking, 8)
+	linking = appendUnsigned(linking, uint64(len(symbols)))
+	linking = append(linking, symbols...)
+	data = appendSection(data, 0, append(appendName(nil, "linking"), linking...))
+	return appendSection(data, 0, append(appendName(nil, "reloc.CODE"), []byte{2, 1, 11, 4, 1, 0x7d}...))
+}
+
+func TestParseDataAndMemoryRelocation(t *testing.T) {
+	object, err := Parse(testObjectWithData())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.DataSegments) != 1 || object.DataSegments[0].Name != ".rodata" || object.DataSegments[0].Align != 4 || string(object.DataSegments[0].Data) != "test" {
+		t.Fatalf("unexpected data segments: %+v", object.DataSegments)
+	}
+	if len(object.Symbols) != 2 || object.Symbols[1].Name != "message" || object.Symbols[1].Index != 0 || object.Symbols[1].Size != 4 {
+		t.Fatalf("unexpected data symbol: %+v", object.Symbols)
+	}
+	if len(object.CodeRelocations) != 1 || object.CodeRelocations[0].Type != 11 || object.CodeRelocations[0].Addend != -3 || object.CodeRelocations[0].Symbol.Name != "message" {
+		t.Fatalf("unexpected memory relocation: %+v", object.CodeRelocations)
+	}
+	patched, err := object.RelocateFunction(object.Functions[0], nil, nil, map[string]uint32{"message": 0x1234})
+	if err != nil || !bytes.Equal(patched[2:7], []byte{0xb1, 0xa4, 0x80, 0x80, 0}) {
+		t.Fatalf("unexpected relocated memory address %x: %v", patched, err)
+	}
+	if _, err := object.RelocateFunction(object.Functions[0], nil, nil, nil); err == nil {
+		t.Fatal("accepted memory relocation without a memory layout")
+	}
+}
+
+func TestParseRejectsMalformedData(t *testing.T) {
+	data := testObjectWithData()
+	for _, invalid := range [][]byte{
+		data[:len(data)-1],
+		bytes.Replace(data, []byte("\x0b\x04test"), []byte("\x0b\x05test"), 1),
+	} {
+		if _, err := Parse(invalid); err == nil {
+			t.Fatalf("accepted malformed data object %x", invalid)
+		}
+	}
+}
+
 func TestParse(t *testing.T) {
 	data := testObjectWithRelocation(0)
 	object, err := Parse(data)
@@ -64,7 +122,7 @@ func TestParse(t *testing.T) {
 	if len(object.Functions) != 1 || object.Functions[0].Name != "local" || object.Functions[0].Type.Params[0] != 0x7f {
 		t.Fatalf("unexpected functions: %+v", object.Functions)
 	}
-	patched, err := object.RelocateFunction(object.Functions[0], map[string]uint32{"c_func": 42}, nil)
+	patched, err := object.RelocateFunction(object.Functions[0], map[string]uint32{"c_func": 42}, nil, nil)
 	if err != nil || patched[2] != 42 || object.Functions[0].Body[2] != 0 {
 		t.Fatalf("unexpected relocated body %x: %v", patched, err)
 	}
@@ -122,7 +180,7 @@ func TestSDKCgoCallRelocation(t *testing.T) {
 		t.Fatalf("unexpected C-call functions: %+v", object.Functions)
 	}
 	function := object.Functions[0]
-	patched, err := object.RelocateFunction(function, map[string]uint32{"_cgo_topofstack": 42}, nil)
+	patched, err := object.RelocateFunction(function, map[string]uint32{"_cgo_topofstack": 42}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,5 +193,32 @@ func TestSDKCgoCallRelocation(t *testing.T) {
 		if value != 42 || width != 5 || function.Body[offset] == patched[offset] {
 			t.Fatalf("relocation at %#x not applied: %x", relocation.Offset, patched[offset:offset+5])
 		}
+	}
+}
+
+func TestSDKRuntimeCgoData(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_RUNTIME_CGO_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_RUNTIME_CGO_OBJECT to a runtime/cgo C object")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.DataSegments) != 2 || object.DataSegments[0].Name != ".rodata..L.str" || len(object.DataSegments[0].Data) != 44 || object.DataSegments[1].Name != ".rodata._cgo_yield" || object.DataSegments[1].Align != 4 {
+		t.Fatalf("unexpected runtime/cgo data segments: %+v", object.DataSegments)
+	}
+	found := false
+	for _, relocation := range object.CodeRelocations {
+		if relocation.Type == 11 && relocation.Symbol.Name == ".L.str" && relocation.Addend == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing runtime/cgo memory relocation: %+v", object.CodeRelocations)
 	}
 }

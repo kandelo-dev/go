@@ -6,6 +6,7 @@ import (
 	"cmd/link/internal/loader"
 	"cmd/link/internal/loadwasm"
 	"cmd/link/internal/sym"
+	"fmt"
 	"io"
 )
 
@@ -25,12 +26,55 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		return
 	}
 	for _, section := range object.Sections {
-		if section.ID == 6 || section.ID == 9 || section.ID == 11 {
+		if section.ID == 6 || section.ID == 9 {
 			Errorf("%s: Wasm object section %d is not yet supported by internal linking", name, section.ID)
+			return
+		}
+		if section.Name == "reloc.DATA" {
+			Errorf("%s: Wasm DATA relocations are not yet supported by internal linking", name)
 			return
 		}
 	}
 	version := ctxt.IncVersion()
+	dataSymbols := make(map[string]loader.Sym)
+	segmentBuilders := make([]*loader.SymbolBuilder, len(object.DataSegments))
+	for index, segment := range object.DataSegments {
+		segmentName := fmt.Sprintf("%s(data[%d])", name, index)
+		builder := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport(segmentName, version))
+		builder.SetType(sym.SNOPTRDATA)
+		builder.SetData(segment.Data)
+		builder.SetSize(int64(len(segment.Data)))
+		builder.SetAlign(int32(segment.Align))
+		builder.SetExternal(true)
+		segmentBuilders[index] = builder
+	}
+	for _, symbol := range object.Symbols {
+		if symbol.Kind != 1 || symbol.Flags&0x10 != 0 {
+			continue
+		}
+		if _, exists := dataSymbols[symbol.Name]; exists {
+			Errorf("%s: duplicate Wasm data symbol name %s", name, symbol.Name)
+			return
+		}
+		localVersion := 0
+		if symbol.Flags&2 != 0 {
+			localVersion = version
+		}
+		builder := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport(symbol.Name, localVersion))
+		if builder.Type() != 0 && builder.Type() != sym.SXREF && builder.Type() != sym.SHOSTOBJ {
+			Errorf("%s: duplicate Wasm data symbol %s (%s)", name, symbol.Name, builder.Type())
+			return
+		}
+		builder.SetType(sym.SNOPTRDATA)
+		builder.SetValue(int64(symbol.Offset))
+		builder.SetSize(int64(symbol.Size))
+		builder.SetExternal(true)
+		segmentBuilders[symbol.Index].AddInteriorSym(builder.Sym())
+		dataSymbols[symbol.Name] = builder.Sym()
+	}
+	for _, builder := range segmentBuilders {
+		builder.SortSub()
+	}
 	if ctxt.WasmHostFunctions == nil {
 		ctxt.WasmHostFunctions = make(map[loader.Sym]WasmHostFunction)
 	}
@@ -62,25 +106,36 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			Errorf("%s: duplicate Wasm host function %s", name, function.Name)
 			return
 		}
-		ctxt.WasmHostFunctions[builder.Sym()] = WasmHostFunction{Object: object, Function: function}
+		ctxt.WasmHostFunctions[builder.Sym()] = WasmHostFunction{Object: object, Function: function, DataSymbols: dataSymbols}
 	}
 	for _, function := range object.Functions {
 		builder := ctxt.loader.MakeSymbolUpdater(functionSymbols[function.Index])
 		for _, relocation := range object.CodeRelocations {
-			if relocation.Type != 0 || relocation.Offset < function.BodyOffset || uint64(relocation.Offset) >= uint64(function.BodyOffset)+uint64(len(function.Body)) {
+			if relocation.Offset < function.BodyOffset || uint64(relocation.Offset) >= uint64(function.BodyOffset)+uint64(len(function.Body)) {
 				continue
 			}
 			target := loader.Sym(0)
-			if relocation.Symbol.Flags&2 != 0 && relocation.Symbol.Flags&0x10 == 0 {
+			if relocation.Type == 0 && relocation.Symbol.Flags&2 != 0 && relocation.Symbol.Flags&0x10 == 0 {
 				target = functionSymbols[relocation.Symbol.Index]
-			} else {
+			} else if relocation.Type == 0 {
 				target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
+			} else if relocation.Type == 3 || relocation.Type == 4 || relocation.Type == 5 || relocation.Type == 11 {
+				target = dataSymbols[relocation.Symbol.Name]
+				if target == 0 {
+					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
+				}
+			} else {
+				continue
 			}
 			if target == 0 {
 				Errorf("%s: missing Wasm relocation target %s", name, relocation.Symbol.Name)
 				return
 			}
-			edge, _ := builder.AddRel(objabi.R_CALL)
+			edgeType := objabi.R_CALL
+			if relocation.Type != 0 {
+				edgeType = objabi.R_ADDR
+			}
+			edge, _ := builder.AddRel(edgeType)
 			edge.SetOff(int32(relocation.Offset - function.BodyOffset))
 			edge.SetSiz(0)
 			edge.SetSym(target)

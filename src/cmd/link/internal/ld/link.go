@@ -123,8 +123,9 @@ type Link struct {
 }
 
 type WasmHostFunction struct {
-	Object   *loadwasm.Object
-	Function loadwasm.Function
+	Object      *loadwasm.Object
+	Function    loadwasm.Function
+	DataSymbols map[string]loader.Sym
 }
 
 type cgodata struct {
