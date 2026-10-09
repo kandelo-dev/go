@@ -73,6 +73,7 @@ const (
 	kSysUtimensat   int32 = 125
 	kSysFchdir      int32 = 127
 	kSysWait4       int32 = 139
+	kSysGetpgid     int32 = 214
 	kSysSpawn       int32 = 500
 )
 

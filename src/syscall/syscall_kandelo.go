@@ -11,6 +11,7 @@ import (
 	"internal/itoa"
 	"internal/oserror"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -364,7 +365,19 @@ type ProcAttr struct {
 }
 
 type SysProcAttr struct {
+	Credential *Credential
+	Setpgid    bool
+	Pgid       int
 }
+
+type Credential struct {
+	Uid         uint32
+	Gid         uint32
+	Groups      []uint32
+	NoSetGroups bool
+}
+
+var ForkLock sync.RWMutex
 
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	return 0, 0, ENOSYS
@@ -417,6 +430,14 @@ func Getpid() int {
 func Getppid() int {
 	ret, _ := kandeloSyscall6(kSysGetppid, 0, 0, 0, 0, 0, 0)
 	return int(ret)
+}
+
+func Getpgid(pid int) (int, error) {
+	ret, errno := kandeloSyscall6(kSysGetpgid, int64(pid), 0, 0, 0, 0, 0)
+	if errno != 0 {
+		return 0, kandeloErrno(errno)
+	}
+	return int(ret), nil
 }
 
 func Gettimeofday(tv *Timeval) error {

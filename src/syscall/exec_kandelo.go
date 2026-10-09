@@ -43,6 +43,14 @@ func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle 
 	if strings.IndexByte(attr.Dir, 0) >= 0 {
 		return 0, 0, EINVAL
 	}
+	if attr.Sys != nil {
+		if attr.Sys.Credential != nil {
+			return 0, 0, ENOSYS
+		}
+		if attr.Sys.Setpgid && (attr.Sys.Pgid < 0 || attr.Sys.Pgid > 0x7fffffff) {
+			return 0, 0, EINVAL
+		}
+	}
 
 	stringBytes := 0
 	for _, value := range argv {
@@ -80,6 +88,10 @@ func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle 
 	binary.LittleEndian.PutUint32(blob[0:], uint32(len(argv)))
 	binary.LittleEndian.PutUint32(blob[4:], uint32(len(attr.Env)))
 	binary.LittleEndian.PutUint32(blob[8:], uint32(actionCount))
+	if attr.Sys != nil && attr.Sys.Setpgid {
+		binary.LittleEndian.PutUint32(blob[12:], 0x02)
+		binary.LittleEndian.PutUint32(blob[16:], uint32(attr.Sys.Pgid))
+	}
 	actionsBase := spawnHeaderBytes + 4*(len(argv)+len(attr.Env))
 	stringsBase := actionsBase + spawnActionBytes*actionCount
 	cursor := 0
@@ -102,6 +114,8 @@ func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle 
 		copy(blob[stringsBase+cursor:], attr.Dir)
 		actionIndex++
 	}
+	ForkLock.Lock()
+	defer ForkLock.Unlock()
 	temporary := make([]int, 0, len(attr.Files))
 	defer func() {
 		for _, fd := range temporary {
