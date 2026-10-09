@@ -96,7 +96,10 @@ func doSyscall(number int32, a0, a1, a2 int64) (ret int64, errno int32) {
 //go:linkname syscall_kandeloSyscall6 syscall.kandeloSyscall6
 //go:nosplit
 func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
-	return doSyscall6(number, a0, a1, a2, a3, a4, a5)
+	entersyscallblock()
+	ret, errno = doSyscall6(number, a0, a1, a2, a3, a4, a5)
+	exitsyscall()
+	return ret, errno
 }
 
 // kandeloInitChannelBase copies this M's syscall-channel base out of the

@@ -1088,10 +1088,15 @@ func Read(fd int, b []byte) (int, error) {
 }
 
 func Write(fd int, b []byte) (int, error) {
+	ret, errno := kandeloSyscall6(kSysSend, int64(fd), int64(uintptr(unsafe.Pointer(unsafe.SliceData(b)))), int64(len(b)), kMsgNoSignal, 0, 0)
+	if kandeloErrno(errno) != ENOTSOCK {
+		runtime.KeepAlive(b)
+		return int(ret), errnoErr(kandeloErrno(errno))
+	}
 	var nwritten size
-	errno := fd_write(int32(fd), makeIOVec(b), 1, &nwritten)
+	errnoValue := fd_write(int32(fd), makeIOVec(b), 1, &nwritten)
 	runtime.KeepAlive(b)
-	return int(nwritten), errnoErr(errno)
+	return int(nwritten), errnoErr(errnoValue)
 }
 
 func Pread(fd int, b []byte, offset int64) (int, error) {

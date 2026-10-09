@@ -48,6 +48,7 @@ const (
 	kSysListen      int32 = 52
 	kSysAccept      int32 = 53
 	kSysConnect     int32 = 54
+	kSysSend        int32 = 55
 	kSysShutdown    int32 = 57
 	kSysGetsockopt  int32 = 58
 	kSysSetsockopt  int32 = 59
@@ -80,6 +81,8 @@ const (
 // kAtFdcwd is the dirfd sentinel meaning "resolve relative to the current
 // working directory", matching musl's AT_FDCWD on this arch.
 const kAtFdcwd int32 = -100
+
+const kMsgNoSignal = 0x4000
 
 // kAtRemovedir is the unlinkat(2) flag selecting directory removal (rmdir),
 // matching Linux/musl AT_REMOVEDIR.
