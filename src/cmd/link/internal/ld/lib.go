@@ -1189,8 +1189,8 @@ var internalpkg = []string{
 	"runtime/asan",
 }
 
-func ldhostobj(ld func(*Link, *bio.Reader, string, int64, string), headType objabi.HeadType, f *bio.Reader, pkg string, length int64, pn string, file string) *Hostobj {
-	isinternal := false
+func ldhostobj(ld func(*Link, *bio.Reader, string, int64, string), headType objabi.HeadType, f *bio.Reader, pkg string, length int64, pn string, file string, internal bool) *Hostobj {
+	isinternal := internal
 	for _, intpkg := range internalpkg {
 		if pkg == intpkg {
 			isinternal = true
@@ -2277,6 +2277,9 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 	lib.Units = append(lib.Units, unit)
 
 	magic := uint32(c1)<<24 | uint32(c2)<<16 | uint32(c3)<<8 | uint32(c4)
+	if magic == 0x0061736d && ctxt.HeadType == objabi.Hkandelo {
+		return ldhostobj(loadwasmobj, ctxt.HeadType, f, pkg, length, pn, file, true)
+	}
 	if magic == 0x7f454c46 { // \x7F E L F
 		ldelf := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 			textp, flags, err := loadelf.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn, ehdr.Flags)
@@ -2287,7 +2290,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			ehdr.Flags = flags
 			ctxt.Textp = append(ctxt.Textp, textp...)
 		}
-		return ldhostobj(ldelf, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldelf, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	if magic&^1 == 0xfeedface || magic&^0x01000000 == 0xcefaedfe {
@@ -2299,7 +2302,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			}
 			ctxt.Textp = append(ctxt.Textp, textp...)
 		}
-		return ldhostobj(ldmacho, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldmacho, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	switch c1<<8 | c2 {
@@ -2324,7 +2327,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			}
 			ctxt.Textp = append(ctxt.Textp, ls.Textp...)
 		}
-		return ldhostobj(ldpe, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldpe, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	if c1 == 0x01 && (c2 == 0xD7 || c2 == 0xF7) {
@@ -2336,7 +2339,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			}
 			ctxt.Textp = append(ctxt.Textp, textp...)
 		}
-		return ldhostobj(ldxcoff, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldxcoff, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	if c1 != 'g' || c2 != 'o' || c3 != ' ' || c4 != 'o' {
@@ -2344,7 +2347,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		// If we try to read symbols from this object, we will
 		// report an error at that time.
 		unknownObjFormat = true
-		return ldhostobj(nil, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(nil, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	/* check the header */

@@ -25,10 +25,25 @@ type Relocation struct {
 	Symbol Symbol
 }
 
+type FuncType struct {
+	Params  []byte
+	Results []byte
+}
+
+type Function struct {
+	Index      uint32
+	Type       FuncType
+	Body       []byte
+	BodyOffset uint32
+	Name       string
+}
+
 type Object struct {
 	Sections        []Section
 	Symbols         []Symbol
 	CodeRelocations []Relocation
+	Types           []FuncType
+	Functions       []Function
 }
 
 type reader struct {
@@ -273,6 +288,131 @@ func codeRelocations(data []byte, sections []Section, symbols []Symbol) ([]Reloc
 	return result, input.done()
 }
 
+func valueTypes(input *reader) ([]byte, error) {
+	count, err := input.unsigned()
+	if err != nil || uint64(count) > uint64(len(input.data)-input.offset) {
+		return nil, fmt.Errorf("invalid Wasm value type count")
+	}
+	values := make([]byte, count)
+	for index := range values {
+		values[index], err = input.byte()
+		if err != nil {
+			return nil, err
+		}
+		switch values[index] {
+		case 0x7f, 0x7e, 0x7d, 0x7c, 0x7b:
+		default:
+			return nil, fmt.Errorf("unsupported Wasm value type %#x", values[index])
+		}
+	}
+	return values, nil
+}
+
+func functionTypes(data []byte) ([]FuncType, error) {
+	input := reader{data: data}
+	count, err := input.unsigned()
+	if err != nil || uint64(count) > uint64(len(data))/3 {
+		return nil, fmt.Errorf("invalid Wasm function type count")
+	}
+	types := make([]FuncType, count)
+	for index := range types {
+		form, err := input.byte()
+		if err != nil || form != 0x60 {
+			return nil, fmt.Errorf("invalid Wasm function type")
+		}
+		if types[index].Params, err = valueTypes(&input); err != nil {
+			return nil, err
+		}
+		if types[index].Results, err = valueTypes(&input); err != nil {
+			return nil, err
+		}
+	}
+	return types, input.done()
+}
+
+func definedFunctions(typeData, codeData []byte, types []FuncType, symbols []Symbol, importedFunctions uint32) ([]Function, error) {
+	declarations := reader{data: typeData}
+	code := reader{data: codeData}
+	count, err := declarations.unsigned()
+	if err != nil || uint64(count) > uint64(len(typeData)) {
+		return nil, fmt.Errorf("invalid Wasm function count")
+	}
+	codeCount, err := code.unsigned()
+	if err != nil || count != codeCount {
+		return nil, fmt.Errorf("Wasm function and CODE counts differ")
+	}
+	functions := make([]Function, count)
+	for index := range functions {
+		typeIndex, err := declarations.unsigned()
+		if err != nil || int(typeIndex) >= len(types) {
+			return nil, fmt.Errorf("Wasm function type index out of range")
+		}
+		functions[index].Index = importedFunctions + uint32(index)
+		functions[index].Type = types[typeIndex]
+		body, err := code.section()
+		if err != nil {
+			return nil, err
+		}
+		functions[index].BodyOffset = uint32(code.offset - len(body.data))
+		functions[index].Body = body.data
+	}
+	if err = declarations.done(); err != nil {
+		return nil, err
+	}
+	if err = code.done(); err != nil {
+		return nil, err
+	}
+	for _, symbol := range symbols {
+		if symbol.Kind != 0 || symbol.Flags&0x10 != 0 {
+			continue
+		}
+		if symbol.Index < importedFunctions || int(symbol.Index-importedFunctions) >= len(functions) {
+			return nil, fmt.Errorf("Wasm function symbol index %d out of range", symbol.Index)
+		}
+		functions[symbol.Index-importedFunctions].Name = symbol.Name
+	}
+	return functions, nil
+}
+
+func (object *Object) RelocateFunction(function Function, functionIndices, globalIndices map[string]uint32) ([]byte, error) {
+	result := append([]byte(nil), function.Body...)
+	for _, relocation := range object.CodeRelocations {
+		if relocation.Offset < function.BodyOffset || uint64(relocation.Offset) >= uint64(function.BodyOffset)+uint64(len(result)) {
+			continue
+		}
+		var target uint32
+		var ok bool
+		switch relocation.Type {
+		case 0:
+			target, ok = functionIndices[relocation.Symbol.Name]
+		case 7:
+			target, ok = globalIndices[relocation.Symbol.Name]
+		default:
+			return nil, fmt.Errorf("unsupported Wasm function relocation type %d for %s", relocation.Type, function.Name)
+		}
+		if !ok {
+			return nil, fmt.Errorf("unresolved Wasm relocation target %s", relocation.Symbol.Name)
+		}
+		offset := int(relocation.Offset - function.BodyOffset)
+		_, width := binary.Uvarint(result[offset:])
+		if width <= 0 || width > 5 || offset+width > len(result) {
+			return nil, fmt.Errorf("invalid Wasm relocation width for %s", relocation.Symbol.Name)
+		}
+		for index := 0; index < width; index++ {
+			value := byte(target & 0x7f)
+			target >>= 7
+			if index < width-1 {
+				value |= 0x80
+			}
+			result[offset+index] = value
+		}
+		if target != 0 {
+			return nil, fmt.Errorf("Wasm relocation value exceeds encoded width")
+		}
+	}
+	return result, nil
+}
+
 func Parse(data []byte) (*Object, error) {
 	if len(data) < 8 || !bytes.Equal(data[:8], []byte("\x00asm\x01\x00\x00\x00")) {
 		return nil, fmt.Errorf("not a Wasm object")
@@ -299,16 +439,25 @@ func Parse(data []byte) (*Object, error) {
 		object.Sections = append(object.Sections, section)
 	}
 	var imported map[byte][]string
+	var typeSection []byte
+	var functionSection []byte
+	var codeSection []byte
 	var linking []byte
 	var relocCode []byte
 	for _, section := range object.Sections {
 		switch {
+		case section.ID == 1:
+			typeSection = section.Data
 		case section.ID == 2:
 			var err error
 			imported, err = imports(section.Data)
 			if err != nil {
 				return nil, err
 			}
+		case section.ID == 3:
+			functionSection = section.Data
+		case section.ID == 10:
+			codeSection = section.Data
 		case section.Name == "linking":
 			linking = section.Data
 		case section.Name == "reloc.CODE":
@@ -327,6 +476,33 @@ func Parse(data []byte) (*Object, error) {
 		object.CodeRelocations, err = codeRelocations(relocCode, object.Sections, object.Symbols)
 		if err != nil {
 			return nil, err
+		}
+	}
+	if typeSection != nil {
+		object.Types, err = functionTypes(typeSection)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if functionSection != nil || codeSection != nil {
+		if functionSection == nil || codeSection == nil {
+			return nil, fmt.Errorf("Wasm object has incomplete function sections")
+		}
+		object.Functions, err = definedFunctions(functionSection, codeSection, object.Types, object.Symbols, uint32(len(imported[0])))
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, relocation := range object.CodeRelocations {
+		covered := false
+		for _, function := range object.Functions {
+			if relocation.Offset >= function.BodyOffset && uint64(relocation.Offset) < uint64(function.BodyOffset)+uint64(len(function.Body)) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			return nil, fmt.Errorf("Wasm CODE relocation at offset %d is outside a function body", relocation.Offset)
 		}
 	}
 	return object, nil

@@ -3,6 +3,7 @@ package loadwasm
 import (
 	"encoding/binary"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -23,11 +24,14 @@ func appendSection(data []byte, kind byte, payload []byte) []byte {
 
 func testObject() []byte {
 	data := []byte("\x00asm\x01\x00\x00\x00")
+	types := []byte{2, 0x60, 0, 1, 0x7f, 0x60, 1, 0x7f, 0}
+	data = appendSection(data, 1, types)
 	importPayload := appendName([]byte{1}, "env")
 	importPayload = appendName(importPayload, "c_func")
 	importPayload = append(importPayload, 0, 0)
 	data = appendSection(data, 2, importPayload)
-	data = appendSection(data, 10, []byte{1, 2, 0, 0x0b})
+	data = appendSection(data, 3, []byte{1, 1})
+	data = appendSection(data, 10, []byte{1, 4, 0, 0x10, 0, 0x0b})
 	symbols := []byte{2, 0, 0, 1}
 	symbols = appendName(symbols, "local")
 	symbols = append(symbols, 0, 0x10, 0)
@@ -41,7 +45,7 @@ func testObject() []byte {
 
 func testObjectWithRelocation(kind byte) []byte {
 	data := testObject()
-	relocations := []byte{1, 1, kind, 0, 1}
+	relocations := []byte{3, 1, kind, 4, 1}
 	return appendSection(data, 0, append(appendName(nil, "reloc.CODE"), relocations...))
 }
 
@@ -56,6 +60,13 @@ func TestParse(t *testing.T) {
 	}
 	if len(object.CodeRelocations) != 1 || object.CodeRelocations[0].Symbol.Name != "c_func" {
 		t.Fatalf("unexpected relocations: %+v", object.CodeRelocations)
+	}
+	if len(object.Functions) != 1 || object.Functions[0].Name != "local" || object.Functions[0].Type.Params[0] != 0x7f {
+		t.Fatalf("unexpected functions: %+v", object.Functions)
+	}
+	patched, err := object.RelocateFunction(object.Functions[0], map[string]uint32{"c_func": 42}, nil)
+	if err != nil || patched[2] != 42 || object.Functions[0].Body[2] != 0 {
+		t.Fatalf("unexpected relocated body %x: %v", patched, err)
 	}
 }
 
@@ -88,5 +99,41 @@ func TestSDKObject(t *testing.T) {
 			t.Fatalf("unresolved CODE relocation symbol: %+v", relocation)
 		}
 		t.Logf("type=%d offset=%#x symbol=%s", relocation.Type, relocation.Offset, relocation.Symbol.Name)
+	}
+	for _, function := range object.Functions {
+		t.Logf("function=%s index=%d params=%x results=%x body=%d bytes", function.Name, function.Index, function.Type.Params, function.Type.Results, len(function.Body))
+	}
+}
+
+func TestSDKCgoCallRelocation(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_CGO_CALL_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_CGO_CALL_OBJECT to the C.abs cgo shim object")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.Functions) != 1 || !strings.HasSuffix(object.Functions[0].Name, "_Cfunc_abs") {
+		t.Fatalf("unexpected C-call functions: %+v", object.Functions)
+	}
+	function := object.Functions[0]
+	patched, err := object.RelocateFunction(function, map[string]uint32{"_cgo_topofstack": 42}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.CodeRelocations) != 2 {
+		t.Fatalf("unexpected C-call relocations: %+v", object.CodeRelocations)
+	}
+	for _, relocation := range object.CodeRelocations {
+		offset := int(relocation.Offset - function.BodyOffset)
+		value, width := binary.Uvarint(patched[offset:])
+		if value != 42 || width != 5 || function.Body[offset] == patched[offset] {
+			t.Fatalf("relocation at %#x not applied: %x", relocation.Offset, patched[offset:offset+5])
+		}
 	}
 }

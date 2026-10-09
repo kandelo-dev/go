@@ -34,6 +34,7 @@ import (
 	"bufio"
 	"cmd/internal/objabi"
 	"cmd/link/internal/loader"
+	"cmd/link/internal/loadwasm"
 	"cmd/link/internal/sym"
 	"debug/elf"
 	"fmt"
@@ -89,12 +90,13 @@ type Link struct {
 
 	compressDWARF bool
 
-	Libdir       []string
-	Library      []*sym.Library
-	LibraryByPkg map[string]*sym.Library
-	Shlibs       []Shlib
-	Textp        []loader.Sym
-	Moduledata   loader.Sym
+	Libdir            []string
+	Library           []*sym.Library
+	LibraryByPkg      map[string]*sym.Library
+	Shlibs            []Shlib
+	Textp             []loader.Sym
+	WasmHostFunctions map[loader.Sym]WasmHostFunction
+	Moduledata        loader.Sym
 
 	PackageFile  map[string]string
 	PackageShlib map[string]string
@@ -118,6 +120,11 @@ type Link struct {
 	// you can create a symbol, and just a generation function will be called
 	// after the symbol's been created in the output mmap.
 	generatorSyms map[loader.Sym]generatorFunc
+}
+
+type WasmHostFunction struct {
+	Object   *loadwasm.Object
+	Function loadwasm.Function
 }
 
 type cgodata struct {

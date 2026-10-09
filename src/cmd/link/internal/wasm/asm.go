@@ -188,7 +188,25 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	// collect functions with WebAssembly body
 	var buildid []byte
 	fns := make([]*wasmFunc, len(ctxt.Textp))
+	hostFunctionIndices := make(map[string]uint32)
+	for _, fn := range ctxt.Textp {
+		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
+			if _, exists := hostFunctionIndices[host.Function.Name]; exists {
+				ld.Exitf("duplicate Wasm host function name %s", host.Function.Name)
+			}
+			hostFunctionIndices[host.Function.Name] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
+		}
+	}
 	for i, fn := range ctxt.Textp {
+		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
+			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, nil)
+			if err != nil {
+				ld.Exitf("Wasm host function %s: %v", host.Function.Name, err)
+			}
+			typeIndex := lookupType(&wasmFuncType{Params: host.Function.Type.Params, Results: host.Function.Type.Results}, &types)
+			fns[i] = &wasmFunc{Name: host.Function.Name, Type: typeIndex, Code: body}
+			continue
+		}
 		wfn := new(bytes.Buffer)
 		if ldr.SymName(fn) == "go:buildid" {
 			writeUleb128(wfn, 0) // number of sets of locals
@@ -259,9 +277,9 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		const kandeloABIVersion = 48
 		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
-		writeUleb128(&body, 0)                     // local declaration count
-		writeI32Const(&body, kandeloABIVersion)    // i32.const 48
-		body.WriteByte(0x0b)                       // end
+		writeUleb128(&body, 0)                  // local declaration count
+		writeI32Const(&body, kandeloABIVersion) // i32.const 48
+		body.WriteByte(0x0b)                    // end
 		// Module function index: imported functions occupy [0, len(hostImports)),
 		// then the defined functions in fns order. This synthesized function is
 		// appended at the current end of fns.
@@ -545,8 +563,8 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 		if addr <= 0 {
 			ld.Errorf("GOOS=kandelo: runtime.kandeloChannelBase has invalid address %d (symbol dead-code-eliminated?)", addr)
 		}
-		ctxt.Out.WriteByte(I32)               // __tls_base type: i32 (address)
-		ctxt.Out.WriteByte(0x00)              // immutable (const)
+		ctxt.Out.WriteByte(I32)  // __tls_base type: i32 (address)
+		ctxt.Out.WriteByte(0x00) // immutable (const)
 		writeI32Const(ctxt.Out, int32(addr))
 		ctxt.Out.WriteByte(0x0b) // end
 
@@ -562,8 +580,8 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader) {
 		// Every C/musl module already exports __heap_base; this makes Go modules
 		// match that native-module shape.
 		dataEnd := int32(ldr.SymValue(ldr.Lookup("runtime.end", 0)))
-		ctxt.Out.WriteByte(I32)   // __heap_base type: i32 (address)
-		ctxt.Out.WriteByte(0x00)  // immutable (const)
+		ctxt.Out.WriteByte(I32)  // __heap_base type: i32 (address)
+		ctxt.Out.WriteByte(0x00) // immutable (const)
 		writeI32Const(ctxt.Out, dataEnd)
 		ctxt.Out.WriteByte(0x0b) // end
 	}
@@ -641,11 +659,11 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 			ctxt.Out.WriteByte(0x00)            // func export
 			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
 		}
-		writeName(ctxt.Out, "__abi_version")             // Kandelo ABI marker
-		ctxt.Out.WriteByte(0x00)                         // func export
-		writeUleb128(ctxt.Out, uint64(abiVersionFuncIdx)) // funcidx
-		writeName(ctxt.Out, "__wasm_posix_thread_slots")  // pthread slot declaration
-		ctxt.Out.WriteByte(0x00)                          // func export
+		writeName(ctxt.Out, "__abi_version")               // Kandelo ABI marker
+		ctxt.Out.WriteByte(0x00)                           // func export
+		writeUleb128(ctxt.Out, uint64(abiVersionFuncIdx))  // funcidx
+		writeName(ctxt.Out, "__wasm_posix_thread_slots")   // pthread slot declaration
+		ctxt.Out.WriteByte(0x00)                           // func export
 		writeUleb128(ctxt.Out, uint64(threadSlotsFuncIdx)) // funcidx
 		writeName(ctxt.Out, "__wasm_posix_preallocate_thread_slots")
 		ctxt.Out.WriteByte(0x00)
