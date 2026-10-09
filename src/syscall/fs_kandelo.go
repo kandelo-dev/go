@@ -654,7 +654,7 @@ func Close(fd int) error {
 }
 
 func CloseOnExec(fd int) {
-	// nothing to do - no exec
+	Fcntl(fd, F_SETFD, FD_CLOEXEC)
 }
 
 // pathArg converts a Go string into a NUL-terminated pointer suitable for a
@@ -1115,15 +1115,34 @@ func Seek(fd int, offset int64, whence int) (int64, error) {
 }
 
 func Dup(fd int) (int, error) {
-	return 0, ENOSYS
+	ret, errno := kandeloSyscall6(kSysDup, int64(fd), 0, 0, 0, 0, 0)
+	if errno != 0 {
+		return -1, kandeloErrno(errno)
+	}
+	return int(ret), nil
 }
 
 func Dup2(fd, newfd int) error {
-	return ENOSYS
+	_, errno := kandeloSyscall6(kSysDup2, int64(fd), int64(newfd), 0, 0, 0, 0)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Pipe(fd []int) error {
-	return ENOSYS
+	return Pipe2(fd, 0)
+}
+
+func Pipe2(fd []int, flags int) error {
+	if len(fd) < 2 {
+		return EINVAL
+	}
+	var pair [2]int32
+	_, errno := kandeloSyscall6(kSysPipe2, int64(uintptr(unsafe.Pointer(&pair[0]))), int64(flags), 0, 0, 0, 0)
+	runtime.KeepAlive(&pair)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	fd[0], fd[1] = int(pair[0]), int(pair[1])
+	return nil
 }
 
 func RandomGet(b []byte) error {

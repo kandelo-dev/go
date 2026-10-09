@@ -4,19 +4,13 @@
 
 //go:build kandelo
 
-// GOOS=kandelo mirrors the wasip1 syscall surface for milestone 1, but every
-// host syscall backend here is a STUB: the wasip1 //go:wasmimport leaves have
-// been replaced with functions returning ENOSYS (see the one-line bodies
-// below). This lets the syscall package compile for kandelo without importing
-// any host functions. The real Kandelo syscall backend (a host channel
-// handshake) is a later milestone task.
-
 package syscall
 
 import (
 	"errors"
 	"internal/itoa"
 	"internal/oserror"
+	"runtime"
 	"unsafe"
 )
 
@@ -232,25 +226,26 @@ const (
 	O_DIRECTORY = 020000
 	O_NOFOLLOW  = 0400
 
-	O_CLOEXEC  = 0
+	O_CLOEXEC  = 0o2000000
 	O_NONBLOCK = 0o4000
 )
 
 const (
-	F_DUPFD   = 0
-	F_GETFD   = 1
-	F_SETFD   = 2
-	F_GETFL   = 3
-	F_SETFL   = 4
-	F_GETOWN  = 5
-	F_SETOWN  = 6
-	F_GETLK   = 7
-	F_SETLK   = 8
-	F_SETLKW  = 9
-	F_RGETLK  = 10
-	F_RSETLK  = 11
-	F_CNVT    = 12
-	F_RSETLKW = 13
+	F_DUPFD    = 0
+	F_GETFD    = 1
+	F_SETFD    = 2
+	F_GETFL    = 3
+	F_SETFL    = 4
+	F_GETOWN   = 5
+	F_SETOWN   = 6
+	F_GETLK    = 7
+	F_SETLK    = 8
+	F_SETLKW   = 9
+	F_RGETLK   = 10
+	F_RSETLK   = 11
+	F_CNVT     = 12
+	F_RSETLKW  = 13
+	FD_CLOEXEC = 1
 
 	F_RDLCK   = 1
 	F_WRLCK   = 2
@@ -305,29 +300,62 @@ const (
 
 type WaitStatus uint32
 
-func (w WaitStatus) Exited() bool       { return false }
-func (w WaitStatus) ExitStatus() int    { return 0 }
-func (w WaitStatus) Signaled() bool     { return false }
-func (w WaitStatus) Signal() Signal     { return 0 }
-func (w WaitStatus) CoreDump() bool     { return false }
-func (w WaitStatus) Stopped() bool      { return false }
-func (w WaitStatus) Continued() bool    { return false }
-func (w WaitStatus) StopSignal() Signal { return 0 }
-func (w WaitStatus) TrapCause() int     { return 0 }
+const (
+	waitMask    = 0x7f
+	waitCore    = 0x80
+	waitStopped = 0x7f
+	waitShift   = 8
+)
 
-// Rusage is a placeholder to allow compilation of the [os/exec] package
-// because we need Go programs to be portable across platforms. WASI does
-// not have a mechanism to spawn processes so there is no reason for an
-// application to take a dependency on this type.
-type Rusage struct {
-	Utime Timeval
-	Stime Timeval
+func (w WaitStatus) Exited() bool { return w&waitMask == 0 }
+func (w WaitStatus) ExitStatus() int {
+	if !w.Exited() {
+		return -1
+	}
+	return int(w>>waitShift) & 0xff
+}
+func (w WaitStatus) Signaled() bool { return w&waitMask != 0 && w&waitMask != waitStopped }
+func (w WaitStatus) Signal() Signal {
+	if !w.Signaled() {
+		return Signal(255)
+	}
+	return Signal(w & waitMask)
+}
+func (w WaitStatus) CoreDump() bool  { return w.Signaled() && w&waitCore != 0 }
+func (w WaitStatus) Stopped() bool   { return w&0xff == waitStopped }
+func (w WaitStatus) Continued() bool { return w == 0xffff }
+func (w WaitStatus) StopSignal() Signal {
+	if !w.Stopped() {
+		return Signal(255)
+	}
+	return Signal(w>>waitShift) & 0xff
+}
+func (w WaitStatus) TrapCause() int {
+	if w.StopSignal() != SIGTRAP {
+		return -1
+	}
+	return int(w>>waitShift) >> 8
 }
 
-// ProcAttr is a placeholder to allow compilation of the [os/exec] package
-// because we need Go programs to be portable across platforms. WASI does
-// not have a mechanism to spawn processes so there is no reason for an
-// application to take a dependency on this type.
+type Rusage struct {
+	Utime    Timeval
+	Stime    Timeval
+	Maxrss   int64
+	Ixrss    int64
+	Idrss    int64
+	Isrss    int64
+	Minflt   int64
+	Majflt   int64
+	Nswap    int64
+	Inblock  int64
+	Oublock  int64
+	Msgsnd   int64
+	Msgrcv   int64
+	Nsignals int64
+	Nvcsw    int64
+	Nivcsw   int64
+}
+
 type ProcAttr struct {
 	Dir   string
 	Env   []string
@@ -382,11 +410,13 @@ func Getgroups() ([]int, error) {
 }
 
 func Getpid() int {
-	return 3
+	ret, _ := kandeloSyscall6(kSysGetpid, 0, 0, 0, 0, 0, 0)
+	return int(ret)
 }
 
 func Getppid() int {
-	return 2
+	ret, _ := kandeloSyscall6(kSysGetppid, 0, 0, 0, 0, 0, 0)
+	return int(ret)
 }
 
 func Gettimeofday(tv *Timeval) error {
@@ -399,27 +429,22 @@ func Gettimeofday(tv *Timeval) error {
 }
 
 func Kill(pid int, signum Signal) error {
-	// WASI does not have the notion of processes nor signal handlers.
-	//
-	// Any signal that the application raises to the process itself will
-	// be interpreted as being cause for termination.
-	if pid > 0 && pid != Getpid() {
-		return ESRCH
-	}
-	ProcExit(128 + int32(signum))
-	return nil
+	_, errno := kandeloSyscall6(kSysKill, int64(pid), int64(signum), 0, 0, 0, 0)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Sendfile(outfd int, infd int, offset *int64, count int) (written int, err error) {
 	return 0, ENOSYS
 }
 
-func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error) {
-	return 0, 0, ENOSYS
-}
-
 func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int, err error) {
-	return 0, ENOSYS
+	ret, errno := kandeloSyscall6(kSysWait4, int64(pid), int64(uintptr(unsafe.Pointer(wstatus))), int64(options), int64(uintptr(unsafe.Pointer(rusage))), 0, 0)
+	runtime.KeepAlive(wstatus)
+	runtime.KeepAlive(rusage)
+	if errno != 0 {
+		return 0, kandeloErrno(errno)
+	}
+	return int(ret), nil
 }
 
 func Umask(mask int) int {
