@@ -141,6 +141,30 @@ func TestTypeAndTableRelocations(t *testing.T) {
 	}
 }
 
+func TestTableFunctionPointerRelocations(t *testing.T) {
+	for _, kind := range []byte{1, 2, 12} {
+		object := &Object{CodeRelocations: []Relocation{{Type: kind, Symbol: Symbol{Name: "c_func"}}}}
+		body := []byte{0x80, 0x80, 0x80, 0x80, 0}
+		if kind == 2 {
+			body = make([]byte, 4)
+		}
+		patched, err := object.RelocateFunction(Function{Body: body}, nil, nil, nil, nil, map[string]uint32{"c_func": 4096}, nil)
+		if err != nil {
+			t.Fatalf("relocation kind %d: %v", kind, err)
+		}
+		if kind == 2 {
+			if binary.LittleEndian.Uint32(patched) != 4096 {
+				t.Fatalf("relocation kind %d = %x", kind, patched)
+			}
+		} else {
+			value := reader{data: patched}
+			if index, err := value.signed(); err != nil || index != 4096 {
+				t.Fatalf("relocation kind %d = %d: %v", kind, index, err)
+			}
+		}
+	}
+}
+
 func TestElementSegments(t *testing.T) {
 	functions := []Function{{Index: 1, Name: "local"}}
 	segments, err := elementSegments([]byte{1, 0, 0x41, 1, 0x0b, 1, 1}, 1, functions)
@@ -363,7 +387,7 @@ func TestSDKTLSSegment(t *testing.T) {
 	}
 }
 
-func TestSDKTLSRelocationFailsExplicitly(t *testing.T) {
+func TestSDKTLSRelocation(t *testing.T) {
 	path := os.Getenv("KANDELO_WASM_TLS_RELOCATION_OBJECT")
 	if path == "" {
 		t.Skip("set KANDELO_WASM_TLS_RELOCATION_OBJECT to an SDK object with a TLS CODE relocation")
@@ -372,7 +396,17 @@ func TestSDKTLSRelocationFailsExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Parse(data); err == nil || !strings.Contains(err.Error(), "per-thread TLS linking") {
-		t.Fatalf("TLS relocation did not fail explicitly: %v", err)
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, relocation := range object.CodeRelocations {
+		if relocation.Type == 21 && relocation.Symbol.Name == "__wasm_thread_pointer" && relocation.Symbol.Flags&0x100 != 0 && relocation.Addend == 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing TLS relocation: %+v", object.CodeRelocations)
 	}
 }

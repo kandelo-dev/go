@@ -634,7 +634,15 @@ func (ctxt *Link) loadlib() {
 		}
 		if any {
 			if *flagLibGCC == "" {
-				*flagLibGCC = ctxt.findLibPathCmd("--print-libgcc-file-name", "libgcc")
+				if ctxt.HeadType == objabi.Hkandelo {
+					*flagLibGCC = ctxt.findLibPath("libc.a")
+					if !filepath.IsAbs(*flagLibGCC) {
+						Errorf("GOOS=kandelo: SDK compiler did not report an absolute libc.a path")
+						*flagLibGCC = "none"
+					}
+				} else {
+					*flagLibGCC = ctxt.findLibPathCmd("--print-libgcc-file-name", "libgcc")
+				}
 			}
 			if runtime.GOOS == "freebsd" && strings.HasPrefix(filepath.Base(*flagLibGCC), "libclang_rt.builtins") {
 				// On newer versions of FreeBSD, libgcc is returned as something like

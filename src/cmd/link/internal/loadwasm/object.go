@@ -457,16 +457,17 @@ func codeRelocations(data []byte, sections []Section, symbols []Symbol) ([]Reloc
 			relocation.Symbol = symbols[symbolIndex]
 		}
 		switch relocation.Type {
-		case 0, 6, 7, 12, 20:
-		case 3, 4, 5, 11:
+		case 0, 1, 2, 6, 7, 12, 20:
+		case 3, 4, 5, 11, 21:
 			relocation.Addend, err = input.signed()
-		case 21:
-			return nil, fmt.Errorf("Wasm TLS relocation requires per-thread TLS linking")
 		default:
 			return nil, fmt.Errorf("unsupported Wasm CODE relocation type %d", relocation.Type)
 		}
 		if err != nil {
 			return nil, err
+		}
+		if relocation.Type == 21 && (relocation.Symbol.Kind != 1 || relocation.Symbol.Flags&0x100 == 0) {
+			return nil, fmt.Errorf("Wasm TLS relocation requires a TLS data symbol")
 		}
 		result = append(result, relocation)
 	}
@@ -626,7 +627,7 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 			target, ok = memoryAddresses[relocation.Symbol.Name]
 		case 20:
 			target, ok = tableNumbers[relocation.Symbol.Name]
-		case 12:
+		case 1, 2, 12:
 			target, ok = tableSlots[relocation.Symbol.Name]
 		default:
 			return nil, fmt.Errorf("unsupported Wasm function relocation type %d for %s", relocation.Type, function.Name)
@@ -636,14 +637,14 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 		}
 		offset := int(relocation.Offset - function.BodyOffset)
 		_, width := binary.Uvarint(result[offset:])
-		if relocation.Type == 5 {
+		if relocation.Type == 2 || relocation.Type == 5 {
 			width = 4
 		}
 		if width <= 0 || width > 5 || offset+width > len(result) {
 			return nil, fmt.Errorf("invalid Wasm relocation width for %s", relocation.Symbol.Name)
 		}
 		value := int64(target) + int64(relocation.Addend)
-		if relocation.Type == 4 || relocation.Type == 11 || relocation.Type == 12 {
+		if relocation.Type == 1 || relocation.Type == 4 || relocation.Type == 11 || relocation.Type == 12 {
 			if value < -1<<31 || value > 1<<31-1 {
 				return nil, fmt.Errorf("Wasm memory address out of range for %s", relocation.Symbol.Name)
 			}
@@ -664,7 +665,7 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 		if value < 0 || value > 1<<32-1 {
 			return nil, fmt.Errorf("Wasm relocation value out of range for %s", relocation.Symbol.Name)
 		}
-		if relocation.Type == 5 {
+		if relocation.Type == 2 || relocation.Type == 5 {
 			binary.LittleEndian.PutUint32(result[offset:], uint32(value))
 			continue
 		}

@@ -25,6 +25,12 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		Errorf("%s: parsing Wasm object: %v", name, err)
 		return
 	}
+	for _, relocation := range object.CodeRelocations {
+		if relocation.Type == 21 {
+			Errorf("%s: Wasm TLS relocation for %s requires per-thread TLS linking", name, relocation.Symbol.Name)
+			return
+		}
+	}
 	for _, section := range object.Sections {
 		if section.ID == 6 {
 			Errorf("%s: Wasm object section %d is not yet supported by internal linking", name, section.ID)
@@ -146,9 +152,9 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 				continue
 			}
 			target := loader.Sym(0)
-			if relocation.Type == 0 && relocation.Symbol.Flags&2 != 0 && relocation.Symbol.Flags&0x10 == 0 {
+			if (relocation.Type == 0 || relocation.Type == 1 || relocation.Type == 2 || relocation.Type == 12) && relocation.Symbol.Flags&2 != 0 && relocation.Symbol.Flags&0x10 == 0 {
 				target = functionSymbols[relocation.Symbol.Index]
-			} else if relocation.Type == 0 {
+			} else if relocation.Type == 0 || relocation.Type == 1 || relocation.Type == 2 || relocation.Type == 12 {
 				target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 			} else if relocation.Type == 3 || relocation.Type == 4 || relocation.Type == 5 || relocation.Type == 11 {
 				target = dataSymbols[relocation.Symbol.Name]
@@ -166,7 +172,7 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 				ctxt.loader.MakeSymbolUpdater(target).SetType(sym.SXREF)
 			}
 			edgeType := objabi.R_CALL
-			if relocation.Type != 0 {
+			if relocation.Type != 0 && relocation.Type != 1 && relocation.Type != 2 && relocation.Type != 12 {
 				edgeType = objabi.R_ADDR
 			}
 			edge, _ := builder.AddRel(edgeType)
