@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -86,10 +87,61 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		ctxt.WasmTLSSymbols = make(map[string]uint32)
 	}
 	tlsSegmentOffsets := make(map[uint32]uint32)
+	initPriorities := make(map[uint32]int)
+	for _, initializer := range object.InitFunctions {
+		initPriorities[initializer.Priority]++
+	}
 	for index, segment := range object.DataSegments {
-		if (strings.HasPrefix(segment.Name, ".init_array") || strings.HasPrefix(segment.Name, ".fini_array")) && len(segment.Data) != 0 {
-			Errorf("%s: Wasm constructor and destructor arrays are not yet supported: %s", name, segment.Name)
+		if strings.HasPrefix(segment.Name, ".fini_array") && len(segment.Data) != 0 {
+			Errorf("%s: Wasm destructor arrays are not yet supported: %s", name, segment.Name)
 			return
+		}
+		if strings.HasPrefix(segment.Name, ".init_array") && len(segment.Data) != 0 {
+			priority := uint32(65535)
+			if suffix, found := strings.CutPrefix(segment.Name, ".init_array."); found {
+				parsed, err := strconv.ParseUint(suffix, 10, 32)
+				if err != nil {
+					Errorf("%s: unsupported Wasm constructor array %s", name, segment.Name)
+					return
+				}
+				priority = uint32(parsed)
+			} else if segment.Name != ".init_array" {
+				Errorf("%s: unsupported Wasm constructor array %s", name, segment.Name)
+				return
+			}
+			if len(segment.Data)%4 != 0 || initPriorities[priority] < len(segment.Data)/4 {
+				Errorf("%s: Wasm constructor array %s has no matching INIT_FUNCS metadata", name, segment.Name)
+				return
+			}
+			for _, value := range segment.Data {
+				if value != 0 {
+					Errorf("%s: Wasm constructor array %s contains nonzero data", name, segment.Name)
+					return
+				}
+			}
+			for _, relocation := range object.DataRelocations {
+				if relocation.Offset >= segment.Offset && relocation.Offset < segment.Offset+uint32(len(segment.Data)) {
+					Errorf("%s: Wasm constructor array %s contains a data relocation", name, segment.Name)
+					return
+				}
+				if relocation.Symbol.Kind == 1 && relocation.Symbol.Flags&0x10 == 0 && relocation.Symbol.Index == uint32(index) {
+					Errorf("%s: Wasm constructor array %s is referenced as data", name, segment.Name)
+					return
+				}
+			}
+			for _, symbol := range object.Symbols {
+				if symbol.Kind == 1 && symbol.Flags&0x10 == 0 && symbol.Flags&2 == 0 && symbol.Index == uint32(index) {
+					Errorf("%s: Wasm constructor array %s exports data", name, segment.Name)
+					return
+				}
+			}
+			for _, relocation := range object.CodeRelocations {
+				if relocation.Symbol.Kind == 1 && relocation.Symbol.Flags&0x10 == 0 && relocation.Symbol.Index == uint32(index) {
+					Errorf("%s: Wasm constructor array %s is referenced as data", name, segment.Name)
+					return
+				}
+			}
+			initPriorities[priority] -= len(segment.Data) / 4
 		}
 		if segment.Flags&2 != 0 {
 			if segment.Align == 0 || segment.Align > 65536 || segment.Align&(segment.Align-1) != 0 {
