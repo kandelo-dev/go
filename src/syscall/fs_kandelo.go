@@ -227,7 +227,7 @@ func fd_readdir(fd int32, buf *byte, bufLen size, cookie dircookie, nwritten *si
 }
 
 func fd_seek(fd int32, offset filedelta, whence uint32, newoffset *filesize) Errno {
-	ret, errno := kandeloSyscall6(kSysLseek, int64(fd), int64(offset), int64(whence), 0, 0, 0)
+	ret, errno := kandeloSyscall6(kSysLseek, int64(fd), int64(uint32(offset)), int64(offset>>32), int64(whence), 0, 0)
 	if errno != 0 {
 		return kandeloErrno(errno)
 	}
