@@ -135,6 +135,9 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 				Errorf("%s: missing Wasm relocation target %s", name, relocation.Symbol.Name)
 				return
 			}
+			if ctxt.loader.SymType(target) == 0 {
+				ctxt.loader.MakeSymbolUpdater(target).SetType(sym.SXREF)
+			}
 			edgeType := objabi.R_CALL
 			if relocation.Type != 0 {
 				edgeType = objabi.R_ADDR
