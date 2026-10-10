@@ -113,6 +113,9 @@ func TestParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(object.FunctionImports) != 1 || object.FunctionImports[0] != (FunctionImport{Module: "env", Name: "c_func", TypeIndex: 0}) {
+		t.Fatalf("unexpected function imports: %+v", object.FunctionImports)
+	}
 	if len(object.Symbols) != 2 || object.Symbols[0].Name != "local" || object.Symbols[1].Name != "c_func" {
 		t.Fatalf("unexpected symbols: %+v", object.Symbols)
 	}

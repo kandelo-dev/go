@@ -43,6 +43,12 @@ type FuncType struct {
 	Results []byte
 }
 
+type FunctionImport struct {
+	Module    string
+	Name      string
+	TypeIndex uint32
+}
+
 type Function struct {
 	Index      uint32
 	Type       FuncType
@@ -62,6 +68,7 @@ type Object struct {
 	CodeRelocations []Relocation
 	DataRelocations []Relocation
 	Types           []FuncType
+	FunctionImports []FunctionImport
 	Functions       []Function
 	DataSegments    []DataSegment
 	ElementSegments []ElementSegment
@@ -138,37 +145,43 @@ func (input *reader) done() error {
 	return nil
 }
 
-func imports(data []byte) (map[byte][]string, error) {
+func imports(data []byte) (map[byte][]string, []FunctionImport, error) {
 	result := make(map[byte][]string)
+	var functionImports []FunctionImport
 	input := reader{data: data}
 	count, err := input.unsigned()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if uint64(count) > uint64(len(data)) {
-		return nil, fmt.Errorf("invalid Wasm import count")
+		return nil, nil, fmt.Errorf("invalid Wasm import count")
 	}
 	for range count {
-		if _, err = input.name(); err != nil {
-			return nil, err
+		module, err := input.name()
+		if err != nil {
+			return nil, nil, err
 		}
 		name, err := input.name()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		kind, err := input.byte()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		result[kind] = append(result[kind], name)
 		switch kind {
 		case 0, 4:
 			if kind == 4 {
 				if _, err = input.byte(); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
-			_, err = input.unsigned()
+			var typeIndex uint32
+			typeIndex, err = input.unsigned()
+			if kind == 0 && err == nil {
+				functionImports = append(functionImports, FunctionImport{Module: module, Name: name, TypeIndex: typeIndex})
+			}
 		case 1:
 			_, err = input.byte()
 			if err == nil {
@@ -182,13 +195,13 @@ func imports(data []byte) (map[byte][]string, error) {
 				_, err = input.byte()
 			}
 		default:
-			return nil, fmt.Errorf("unsupported Wasm import kind %d", kind)
+			return nil, nil, fmt.Errorf("unsupported Wasm import kind %d", kind)
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return result, input.done()
+	return result, functionImports, input.done()
 }
 
 func limits(input *reader) error {
@@ -731,7 +744,7 @@ func Parse(data []byte) (*Object, error) {
 			typeSection = section.Data
 		case section.ID == 2:
 			var err error
-			imported, err = imports(section.Data)
+			imported, object.FunctionImports, err = imports(section.Data)
 			if err != nil {
 				return nil, err
 			}
@@ -792,6 +805,11 @@ func Parse(data []byte) (*Object, error) {
 		object.Types, err = functionTypes(typeSection)
 		if err != nil {
 			return nil, err
+		}
+	}
+	for _, importedFunction := range object.FunctionImports {
+		if int(importedFunction.TypeIndex) >= len(object.Types) {
+			return nil, fmt.Errorf("Wasm function import %s.%s type index %d out of range", importedFunction.Module, importedFunction.Name, importedFunction.TypeIndex)
 		}
 	}
 	for _, relocation := range object.CodeRelocations {

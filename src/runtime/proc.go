@@ -218,7 +218,7 @@ func main() {
 			throw("_cgo_pthread_key_created missing")
 		}
 
-		if _cgo_thread_start == nil {
+		if GOOS != "kandelo" && _cgo_thread_start == nil {
 			throw("_cgo_thread_start missing")
 		}
 		if GOOS != "windows" {
@@ -2342,7 +2342,7 @@ func allocm(pp *p, fn func(), id int64) *m {
 
 	// In case of cgo or Solaris or illumos or Darwin, pthread_create will make us a stack.
 	// Windows and Plan 9 will layout sched stack on OS stack.
-	if iscgo || mStackIsSystemAllocated() {
+	if (iscgo && GOOS != "kandelo") || mStackIsSystemAllocated() {
 		mp.g0 = malg(-1)
 	} else {
 		mp.g0 = malg(16384 * sys.StackGuardMultiplier)
@@ -2909,7 +2909,7 @@ func newm(fn func(), pp *p, id int64) {
 }
 
 func newm1(mp *m) {
-	if iscgo {
+	if iscgo && GOOS != "kandelo" {
 		var ts cgothreadstart
 		if _cgo_thread_start == nil {
 			throw("_cgo_thread_start missing")

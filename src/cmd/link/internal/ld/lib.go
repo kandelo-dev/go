@@ -618,6 +618,9 @@ func (ctxt *Link) loadlib() {
 	// Conditionally load host objects, or setup for external linking.
 	hostobjs(ctxt)
 	hostlinksetup(ctxt)
+	if ctxt.HeadType == objabi.Hkandelo && ctxt.LinkMode == LinkInternal && iscgo {
+		loadKandeloExecutableGlue(ctxt)
+	}
 
 	if ctxt.LinkMode == LinkInternal && len(hostobj) != 0 {
 		// If we have any undefined symbols in external
@@ -1255,6 +1258,28 @@ func hostobjs(ctxt *Link) {
 			captureHostObj(h)
 		}
 		f.Close()
+	}
+}
+
+func loadKandeloExecutableGlue(ctxt *Link) {
+	dir, err := os.MkdirTemp("", "go-kandelo-glue-")
+	if err != nil {
+		Exitf("GOOS=kandelo: create glue directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	extld := ctxt.extld()
+	for _, name := range []string{"channel_syscall", "compiler_rt", "cxxrt"} {
+		source := ctxt.findLibPath(name + ".c")
+		if !filepath.IsAbs(source) {
+			Exitf("GOOS=kandelo: SDK compiler did not report an absolute %s.c path", name)
+		}
+		object := filepath.Join(dir, name+".o")
+		args := append(append([]string{}, extld[1:]...), "-O2", "-fPIC", "-c", source, "-o", object)
+		out, err := exec.Command(extld[0], args...).CombinedOutput()
+		if err != nil {
+			Exitf("GOOS=kandelo: compile %s glue: %v\n%s", name, err, out)
+		}
+		hostObject(ctxt, "kandelo/"+name, object)
 	}
 }
 

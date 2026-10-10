@@ -270,7 +270,7 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 				if target == 0 {
 					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 				}
-			} else if relocation.Type == 7 && (relocation.Symbol.Kind == 1 || relocation.Symbol.Kind == 2) && relocation.Symbol.Name != "__memory_base" && relocation.Symbol.Name != "__table_base" && relocation.Symbol.Name != "__stack_pointer" && relocation.Symbol.Name != "__tls_base" {
+			} else if relocation.Type == 7 && (relocation.Symbol.Kind == 1 || relocation.Symbol.Kind == 2) && relocation.Symbol.Name != "__memory_base" && relocation.Symbol.Name != "__table_base" && relocation.Symbol.Name != "__stack_pointer" && relocation.Symbol.Name != "__tls_base" && relocation.Symbol.Name != "__channel_base" {
 				target = dataSymbols[relocation.Symbol.Name]
 				if target == 0 {
 					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
@@ -293,6 +293,9 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			edge.SetOff(int32(relocation.Offset - function.BodyOffset))
 			edge.SetSiz(4)
 			edge.SetSym(target)
+			if edgeType == objabi.R_CALL {
+				ctxt.loader.SetAttrReachable(target, true)
+			}
 		}
 	}
 }
