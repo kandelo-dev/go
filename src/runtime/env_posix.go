@@ -69,6 +69,15 @@ func setenv_c(k string, v string) {
 	if _cgo_setenv == nil {
 		return
 	}
+	if GOOS == "kandelo" {
+		key := cstring(k)
+		value := cstring(v)
+		arg := [2]uint32{uint32(uintptr(key)), uint32(uintptr(value))}
+		asmcgocall(_cgo_setenv, unsafe.Pointer(&arg))
+		KeepAlive(key)
+		KeepAlive(value)
+		return
+	}
 	arg := [2]unsafe.Pointer{cstring(k), cstring(v)}
 	asmcgocall(_cgo_setenv, unsafe.Pointer(&arg))
 }
@@ -76,6 +85,13 @@ func setenv_c(k string, v string) {
 // Update the C environment if cgo is loaded.
 func unsetenv_c(k string) {
 	if _cgo_unsetenv == nil {
+		return
+	}
+	if GOOS == "kandelo" {
+		key := cstring(k)
+		arg := [1]uint32{uint32(uintptr(key))}
+		asmcgocall(_cgo_unsetenv, unsafe.Pointer(&arg))
+		KeepAlive(key)
 		return
 	}
 	arg := [1]unsafe.Pointer{cstring(k)}

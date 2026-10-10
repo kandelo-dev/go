@@ -5,7 +5,13 @@
 #include "textflag.h"
 
 TEXT ·set_crosscall2(SB),NOSPLIT,$0-0
+#ifdef GOOS_kandelo
+	CALL runtime·kandeloCgoPrepareEnv(SB)
+	I64Const $runtime·kandeloCgoStartupArgs(SB)
+	I32WrapI64
+#else
 	I32Const $0
+#endif
 	I64Const $x_cgo_kandelo_init(SB)
 	I64Const $16
 	I64ShrU
