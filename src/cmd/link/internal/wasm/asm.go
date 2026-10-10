@@ -273,6 +273,13 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	hasCTLSBase := len(ctxt.WasmTLSTemplate) != 0
 	dataAddressGlobalNames := make(map[string]string)
 	var cgoTopofstackGoIndex uint32
+	for _, exported := range ldr.WasmExports {
+		name := ldr.SymName(exported)
+		if _, exists := hostFunctionIndices[name]; exists {
+			ld.Exitf("duplicate Wasm function name %s", name)
+		}
+		hostFunctionIndices[name] = uint32(len(hostImports)) + uint32(ldr.SymValue(exported)>>16) - funcValueOffset
+	}
 	for _, fn := range ctxt.Textp {
 		if ldr.SymName(fn) == "_cgo_topofstack" {
 			cgoTopofstackGoIndex = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset

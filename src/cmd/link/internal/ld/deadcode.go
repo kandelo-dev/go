@@ -116,12 +116,35 @@ func (d *deadcodePass) init() {
 		}
 		d.mark(s, 0)
 	}
-	// So are wasmexports.
+	wasmRoots := make(map[loader.Sym]bool)
 	for _, s := range d.ldr.WasmExports {
 		if d.ctxt.Debugvlog > 1 {
 			d.ctxt.Logf("deadcode start wasmexport: %s<%d>\n", d.ldr.SymName(s), d.ldr.SymVersion(s))
 		}
-		d.mark(s, 0)
+		wasmRoots[s] = true
+	}
+	for _, relocation := range d.ctxt.WasmDataTableRelocs {
+		if d.ldr.SymType(relocation.Target) == sym.STEXT {
+			wasmRoots[relocation.Target] = true
+		}
+	}
+	for source := range d.ctxt.WasmHostFunctions {
+		relocs := d.ldr.Relocs(source)
+		for index := 0; index < relocs.Count(); index++ {
+			target := relocs.At(index).Sym()
+			if d.ldr.SymType(target) == sym.STEXT {
+				if _, isWasmHost := d.ctxt.WasmHostFunctions[target]; !isWasmHost {
+					wasmRoots[target] = true
+				}
+			}
+		}
+	}
+	for root := range wasmRoots {
+		if d.ldr.AttrReachable(root) {
+			d.wq.push(root)
+		} else {
+			d.mark(root, 0)
+		}
 	}
 
 	d.mapinitnoop = d.ldr.Lookup("runtime.mapinitnoop", abiInternalVer)

@@ -7,10 +7,7 @@ extern _Thread_local unsigned long __wasm_thread_pointer;
 extern int __init_tp(void *thread_pointer);
 extern void (*x_crosscall2_ptr)(void (*fn)(void *), void *, int, size_t);
 
-void crosscall2(void (*fn)(void *), void *arg, int size, size_t context)
-{
-	__builtin_trap();
-}
+extern void crosscall2(void (*fn)(void *), void *arg, int size, size_t context);
 
 void x_cgo_kandelo_init(void *arg)
 {
