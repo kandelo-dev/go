@@ -368,7 +368,7 @@ func elementSegments(data []byte, importedFunctions uint32, functions []Function
 			if err != nil {
 				return nil, err
 			}
-			if functionIndex < importedFunctions || int(functionIndex-importedFunctions) >= len(functions) {
+			if functionIndex >= importedFunctions+uint32(len(functions)) {
 				return nil, fmt.Errorf("unsupported Wasm element function index %d", functionIndex)
 			}
 			segments[index].Functions = append(segments[index].Functions, functionIndex)
@@ -490,7 +490,7 @@ func dataRelocations(data []byte, sections []Section, symbols []Symbol, segments
 		if relocation.Type, err = input.byte(); err != nil {
 			return nil, err
 		}
-		if relocation.Type != 5 {
+		if relocation.Type != 2 && relocation.Type != 5 {
 			return nil, fmt.Errorf("unsupported Wasm DATA relocation type %d", relocation.Type)
 		}
 		if relocation.Offset, err = input.unsigned(); err != nil {
@@ -501,11 +501,13 @@ func dataRelocations(data []byte, sections []Section, symbols []Symbol, segments
 			return nil, fmt.Errorf("Wasm DATA relocation symbol index out of range")
 		}
 		relocation.Symbol = symbols[symbolIndex]
-		if relocation.Symbol.Kind != 1 {
+		if (relocation.Type == 5 && relocation.Symbol.Kind != 1) || (relocation.Type == 2 && relocation.Symbol.Kind != 0) {
 			return nil, fmt.Errorf("unsupported Wasm DATA relocation symbol kind %d", relocation.Symbol.Kind)
 		}
-		if relocation.Addend, err = input.signed(); err != nil {
-			return nil, err
+		if relocation.Type == 5 {
+			if relocation.Addend, err = input.signed(); err != nil {
+				return nil, err
+			}
 		}
 		covered := false
 		for _, segment := range segments {
@@ -608,7 +610,7 @@ func definedFunctions(typeData, codeData []byte, types []FuncType, symbols []Sym
 	return functions, nil
 }
 
-func (object *Object) RelocateFunction(function Function, functionIndices, globalIndices, memoryAddresses, tableNumbers, tableSlots map[string]uint32, typeIndices map[uint32]uint32) ([]byte, error) {
+func (object *Object) RelocateFunction(function Function, functionIndices, globalIndices, memoryAddresses, tableNumbers, tableSlots map[string]uint32, typeIndices map[uint32]uint32, tlsOffsets ...map[string]uint32) ([]byte, error) {
 	result := append([]byte(nil), function.Body...)
 	for _, relocation := range object.CodeRelocations {
 		if relocation.Offset < function.BodyOffset || uint64(relocation.Offset) >= uint64(function.BodyOffset)+uint64(len(result)) {
@@ -625,6 +627,10 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 			target, ok = globalIndices[relocation.Symbol.Name]
 		case 3, 4, 5, 11:
 			target, ok = memoryAddresses[relocation.Symbol.Name]
+		case 21:
+			if len(tlsOffsets) != 0 {
+				target, ok = tlsOffsets[0][relocation.Symbol.Name]
+			}
 		case 20:
 			target, ok = tableNumbers[relocation.Symbol.Name]
 		case 1, 2, 12:
@@ -644,7 +650,7 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 			return nil, fmt.Errorf("invalid Wasm relocation width for %s", relocation.Symbol.Name)
 		}
 		value := int64(target) + int64(relocation.Addend)
-		if relocation.Type == 1 || relocation.Type == 4 || relocation.Type == 11 || relocation.Type == 12 {
+		if relocation.Type == 1 || relocation.Type == 4 || relocation.Type == 11 || relocation.Type == 12 || relocation.Type == 21 {
 			if value < -1<<31 || value > 1<<31-1 {
 				return nil, fmt.Errorf("Wasm memory address out of range for %s", relocation.Symbol.Name)
 			}

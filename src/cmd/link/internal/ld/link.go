@@ -90,14 +90,21 @@ type Link struct {
 
 	compressDWARF bool
 
-	Libdir            []string
-	Library           []*sym.Library
-	LibraryByPkg      map[string]*sym.Library
-	Shlibs            []Shlib
-	Textp             []loader.Sym
-	WasmHostFunctions map[loader.Sym]WasmHostFunction
-	WasmDataSymbols   map[string]loader.Sym
-	Moduledata        loader.Sym
+	Libdir              []string
+	Library             []*sym.Library
+	LibraryByPkg        map[string]*sym.Library
+	Shlibs              []Shlib
+	Textp               []loader.Sym
+	WasmHostFunctions   map[loader.Sym]WasmHostFunction
+	WasmWeakFunctions   map[loader.Sym]bool
+	WasmDataSymbols     map[string]loader.Sym
+	WasmTLSSymbols      map[string]uint32
+	WasmTLSTemplate     []byte
+	WasmTLSTemplateSym  loader.Sym
+	WasmTLSMainSym      loader.Sym
+	WasmTLSAlign        uint32
+	WasmDataTableRelocs []WasmDataTableReloc
+	Moduledata          loader.Sym
 
 	PackageFile  map[string]string
 	PackageShlib map[string]string
@@ -127,6 +134,14 @@ type WasmHostFunction struct {
 	Object      *loadwasm.Object
 	Function    loadwasm.Function
 	DataSymbols map[string]loader.Sym
+	TLSSymbols  map[string]uint32
+}
+
+type WasmDataTableReloc struct {
+	Segment loader.Sym
+	Offset  uint32
+	Target  loader.Sym
+	Addend  int32
 }
 
 type cgodata struct {

@@ -12,6 +12,7 @@ import (
 	"cmd/link/internal/ld"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"internal/abi"
@@ -150,6 +151,26 @@ func asmb(ctxt *ld.Link, ldr *loader.Loader) {
 		data := ld.DatblkBytes(ctxt, int64(sect.Vaddr), int64(sect.Length))
 		dataSects[i] = wasmDataSect{sect, data}
 	}
+	for _, relocation := range ctxt.WasmDataTableRelocs {
+		address := ldr.SymValue(relocation.Segment) + int64(relocation.Offset)
+		target := ldr.SymValue(relocation.Target)
+		if target <= 0 || target>>16 < funcValueOffset || target&0xffff != 0 {
+			ld.Exitf("invalid Wasm function pointer relocation target %s (value=%d type=%s reachable=%t)", ldr.SymName(relocation.Target), target, ldr.SymType(relocation.Target), ldr.AttrReachable(relocation.Target))
+		}
+		found := false
+		for _, section := range dataSects {
+			start := int64(section.sect.Vaddr)
+			if address < start || address+4 > start+int64(len(section.data)) {
+				continue
+			}
+			binary.LittleEndian.PutUint32(section.data[address-start:], uint32(target>>16)+uint32(relocation.Addend))
+			found = true
+			break
+		}
+		if !found {
+			ld.Exitf("Wasm function pointer relocation outside static data for %s", ldr.SymName(relocation.Target))
+		}
+	}
 }
 
 // asmb writes the final WebAssembly module binary.
@@ -207,7 +228,8 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	hasMemoryBase := false
 	hasTableBase := false
 	hasStackPointer := false
-	dataAddressGlobalNames := make(map[string]bool)
+	hasCTLSBase := len(ctxt.WasmTLSTemplate) != 0
+	dataAddressGlobalNames := make(map[string]string)
 	for _, fn := range ctxt.Textp {
 		if ldr.SymName(fn) == "_cgo_topofstack" {
 			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
@@ -218,6 +240,9 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			}
 			hostFunctionIndices[host.Function.Name] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
 			for _, relocation := range host.Object.CodeRelocations {
+				if relocation.Offset < host.Function.BodyOffset || uint64(relocation.Offset) >= uint64(host.Function.BodyOffset)+uint64(len(host.Function.Body)) {
+					continue
+				}
 				if relocation.Type == 7 {
 					switch relocation.Symbol.Name {
 					case "__memory_base":
@@ -227,9 +252,9 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 					case "__stack_pointer":
 						hasStackPointer = true
 					case "__tls_base":
-						ld.Exitf("Wasm C TLS base requires per-thread TLS linking")
+						hasCTLSBase = true
 					default:
-						dataAddressGlobalNames[relocation.Symbol.Name] = true
+						dataAddressGlobalNames[relocation.Symbol.Name] = host.Function.Name
 					}
 				}
 			}
@@ -244,7 +269,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	for _, name := range dataAddressGlobalNamesSorted {
 		address, ok := globalDataAddresses[name]
 		if !ok {
-			ld.Exitf("unresolved Wasm data-address global %s", name)
+			ld.Exitf("unresolved Wasm data-address global %s referenced by %s", name, dataAddressGlobalNames[name])
 		}
 		dataAddressGlobals = append(dataAddressGlobals, wasmDataAddressGlobal{Name: name, Address: address})
 	}
@@ -264,6 +289,10 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			}
 			if hasStackPointer {
 				globalIndices["__stack_pointer"] = nextGlobal
+				nextGlobal++
+			}
+			if hasCTLSBase {
+				globalIndices["__tls_base"] = nextGlobal
 				nextGlobal++
 			}
 			for _, addressGlobal := range dataAddressGlobals {
@@ -289,7 +318,14 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			for name, index := range hostFunctionIndices {
 				tableSlots[name] = funcValueOffset + index - uint32(len(hostImports))
 			}
-			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses, map[string]uint32{"__indirect_function_table": 0}, tableSlots, typeIndices)
+			tlsOffsets := make(map[string]uint32, len(ctxt.WasmTLSSymbols)+len(host.TLSSymbols))
+			for name, offset := range ctxt.WasmTLSSymbols {
+				tlsOffsets[name] = offset
+			}
+			for name, offset := range host.TLSSymbols {
+				tlsOffsets[name] = offset
+			}
+			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses, map[string]uint32{"__indirect_function_table": 0}, tableSlots, typeIndices, tlsOffsets)
 			if err != nil {
 				ld.Exitf("Wasm host function %s: %v", host.Function.Name, err)
 			}
@@ -413,6 +449,49 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		preallocateThreadSlotsFuncIdx = uint32(len(hostImports)) + uint32(len(fns))
 		fns = append(fns, &wasmFunc{Name: "__wasm_posix_preallocate_thread_slots", Type: markerType, Code: body.Bytes()})
 	}
+	var initTLSFuncIdx, startTLSFuncIdx uint32
+	if buildcfg.GOOS == "kandelo" && len(ctxt.WasmTLSTemplate) != 0 {
+		initTLSFuncIdx = uint32(len(hostImports) + len(fns))
+		initType := lookupType(&wasmFuncType{Params: []byte{I32}}, &types)
+		var body bytes.Buffer
+		writeUleb128(&body, 0)
+		body.WriteByte(0x20)
+		writeUleb128(&body, 0)
+		body.WriteByte(0x24)
+		globalIndex := uint32(10)
+		if hasMemoryBase {
+			globalIndex++
+		}
+		if hasTableBase {
+			globalIndex++
+		}
+		if hasStackPointer {
+			globalIndex++
+		}
+		writeUleb128(&body, uint64(globalIndex))
+		body.WriteByte(0x20)
+		writeUleb128(&body, 0)
+		writeI32Const(&body, int32(ldr.SymValue(ctxt.WasmTLSTemplateSym)))
+		writeI32Const(&body, int32(len(ctxt.WasmTLSTemplate)))
+		body.Write([]byte{0xfc, 0x0a, 0x00, 0x00, 0x0b})
+		fns = append(fns, &wasmFunc{Name: "__wasm_init_tls", Type: initType, Code: body.Bytes()})
+		entry := ldr.Lookup("_rt0_wasm_kandelo", 0)
+		if entry == 0 {
+			ld.Exitf("Go Kandelo entry point not defined")
+		}
+		entryIndex := uint32(len(hostImports)) + uint32(ldr.SymValue(entry)>>16) - funcValueOffset
+		startTLSFuncIdx = uint32(len(hostImports) + len(fns))
+		startType := lookupType(&wasmFuncType{}, &types)
+		var startBody bytes.Buffer
+		writeUleb128(&startBody, 0)
+		writeI32Const(&startBody, int32(ldr.SymValue(ctxt.WasmTLSMainSym)))
+		startBody.WriteByte(0x10)
+		writeUleb128(&startBody, uint64(initTLSFuncIdx))
+		startBody.WriteByte(0x10)
+		writeUleb128(&startBody, uint64(entryIndex))
+		startBody.WriteByte(0x0b)
+		fns = append(fns, &wasmFunc{Name: "__kandelo_start_tls", Type: startType, Code: startBody.Bytes()})
+	}
 
 	ctxt.Out.Write([]byte{0x00, 0x61, 0x73, 0x6d}) // magic
 	ctxt.Out.Write([]byte{0x01, 0x00, 0x00, 0x00}) // version
@@ -432,8 +511,8 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// memory section.
 		writeMemorySec(ctxt, ldr)
 	}
-	writeGlobalSec(ctxt, ldr, hasMemoryBase, hasTableBase, hasStackPointer, dataAddressGlobals)
-	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx, hasMemoryBase, hasTableBase, hasStackPointer)
+	writeGlobalSec(ctxt, ldr, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, dataAddressGlobals)
+	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx, initTLSFuncIdx, startTLSFuncIdx, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
@@ -598,7 +677,7 @@ func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
 }
 
 // writeGlobalSec writes the section that declares global variables.
-func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBase, hasStackPointer bool, dataAddressGlobals []wasmDataAddressGlobal) {
+func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase bool, dataAddressGlobals []wasmDataAddressGlobal) {
 	sizeOffset := writeSecHeader(ctxt, sectionGlobal)
 
 	globalRegs := []byte{
@@ -635,6 +714,9 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 			numGlobals++
 		}
 		if hasStackPointer {
+			numGlobals++
+		}
+		if hasCTLSBase {
 			numGlobals++
 		}
 		numGlobals += len(dataAddressGlobals)
@@ -703,6 +785,12 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 			writeI32Const(ctxt.Out, 0)
 			ctxt.Out.WriteByte(0x0b)
 		}
+		if hasCTLSBase {
+			ctxt.Out.WriteByte(I32)
+			ctxt.Out.WriteByte(0x01)
+			writeI32Const(ctxt.Out, 0)
+			ctxt.Out.WriteByte(0x0b)
+		}
 		for _, addressGlobal := range dataAddressGlobals {
 			ctxt.Out.WriteByte(I32)
 			ctxt.Out.WriteByte(0x00)
@@ -717,7 +805,7 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
 // The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32, hasMemoryBase, hasTableBase, hasStackPointer bool) {
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32, initTLSFuncIdx, startTLSFuncIdx uint32, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase bool) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
@@ -764,6 +852,9 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		if hasStackPointer {
 			exportCount++
 		}
+		if initTLSFuncIdx != 0 {
+			exportCount++
+		}
 		writeUleb128(ctxt.Out, uint64(exportCount)) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
@@ -779,6 +870,9 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 			ld.Errorf("export symbol %s not defined", entry)
 		}
 		idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
+		if startTLSFuncIdx != 0 {
+			idx = startTLSFuncIdx
+		}
 		writeName(ctxt.Out, entryExpName)   // process entry point
 		ctxt.Out.WriteByte(0x00)            // func export
 		writeUleb128(ctxt.Out, uint64(idx)) // funcidx
@@ -797,6 +891,11 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__wasm_posix_preallocate_thread_slots")
 		ctxt.Out.WriteByte(0x00)
 		writeUleb128(ctxt.Out, uint64(preallocateThreadSlotsFuncIdx))
+		if initTLSFuncIdx != 0 {
+			writeName(ctxt.Out, "__wasm_init_tls")
+			ctxt.Out.WriteByte(0x00)
+			writeUleb128(ctxt.Out, uint64(initTLSFuncIdx))
+		}
 		// __tls_base global (index 8): the 9 globals are the 8 fixed VM
 		// registers (indices 0-7) plus this synthesized channel-base receiver
 		// appended in writeGlobalSec.

@@ -171,9 +171,12 @@ func TestElementSegments(t *testing.T) {
 	if err != nil || len(segments) != 1 || segments[0].Offset != 1 || len(segments[0].Functions) != 1 || segments[0].Functions[0] != 1 {
 		t.Fatalf("element segments = %+v: %v", segments, err)
 	}
+	imported, err := elementSegments([]byte{1, 0, 0x41, 1, 0x0b, 1, 0}, 1, functions)
+	if err != nil || len(imported) != 1 || len(imported[0].Functions) != 1 || imported[0].Functions[0] != 0 {
+		t.Fatalf("imported element segments = %+v: %v", imported, err)
+	}
 	for _, data := range [][]byte{
 		{1, 1, 0x41, 1, 0x0b, 1, 1},
-		{1, 0, 0x41, 1, 0x0b, 1, 0},
 		{1, 0, 0x41, 1, 0x0b, 1, 2},
 		{1, 0, 0x41, 1, 0x0b, 1},
 	} {
