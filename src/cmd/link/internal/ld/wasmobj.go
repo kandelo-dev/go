@@ -39,6 +39,10 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 	dataSymbols := make(map[string]loader.Sym)
 	segmentBuilders := make([]*loader.SymbolBuilder, len(object.DataSegments))
 	for index, segment := range object.DataSegments {
+		if segment.Flags&2 != 0 {
+			Errorf("%s: Wasm TLS data segment %s requires per-thread TLS linking", name, segment.Name)
+			return
+		}
 		segmentName := fmt.Sprintf("%s(data[%d])", name, index)
 		builder := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport(segmentName, version))
 		builder.SetType(sym.SNOPTRDATA)

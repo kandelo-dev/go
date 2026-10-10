@@ -460,6 +460,8 @@ func codeRelocations(data []byte, sections []Section, symbols []Symbol) ([]Reloc
 		case 0, 6, 7, 12, 20:
 		case 3, 4, 5, 11:
 			relocation.Addend, err = input.signed()
+		case 21:
+			return nil, fmt.Errorf("Wasm TLS relocation requires per-thread TLS linking")
 		default:
 			return nil, fmt.Errorf("unsupported Wasm CODE relocation type %d", relocation.Type)
 		}

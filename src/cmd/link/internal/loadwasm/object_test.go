@@ -344,3 +344,35 @@ func TestSDKDataRelocations(t *testing.T) {
 		t.Fatalf("unexpected DATA relocations: %+v", object.DataRelocations)
 	}
 }
+
+func TestSDKTLSSegment(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_TLS_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_TLS_OBJECT to an SDK object with a TLS segment")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.DataSegments) != 2 || object.DataSegments[1].Name != ".tbss.__wasm_thread_pointer" || object.DataSegments[1].Flags&2 == 0 {
+		t.Fatalf("missing C TLS segment: %+v", object.DataSegments)
+	}
+}
+
+func TestSDKTLSRelocationFailsExplicitly(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_TLS_RELOCATION_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_TLS_RELOCATION_OBJECT to an SDK object with a TLS CODE relocation")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(data); err == nil || !strings.Contains(err.Error(), "per-thread TLS linking") {
+		t.Fatalf("TLS relocation did not fail explicitly: %v", err)
+	}
+}
