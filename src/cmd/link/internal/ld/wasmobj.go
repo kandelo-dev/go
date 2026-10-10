@@ -8,6 +8,7 @@ import (
 	"cmd/link/internal/sym"
 	"fmt"
 	"io"
+	"strings"
 )
 
 func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name string) {
@@ -47,6 +48,10 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 	}
 	tlsSegmentOffsets := make(map[uint32]uint32)
 	for index, segment := range object.DataSegments {
+		if (strings.HasPrefix(segment.Name, ".init_array") || strings.HasPrefix(segment.Name, ".fini_array")) && len(segment.Data) != 0 {
+			Errorf("%s: Wasm constructor and destructor arrays are not yet supported: %s", name, segment.Name)
+			return
+		}
 		if segment.Flags&2 != 0 {
 			if segment.Align == 0 || segment.Align > 65536 || segment.Align&(segment.Align-1) != 0 {
 				Errorf("%s: invalid Wasm TLS alignment for %s", name, segment.Name)
@@ -266,6 +271,9 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			} else if relocation.Type == 0 || relocation.Type == 1 || relocation.Type == 2 || relocation.Type == 12 {
 				target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 			} else if relocation.Type == 3 || relocation.Type == 4 || relocation.Type == 5 || relocation.Type == 11 {
+				if relocation.Symbol.Flags&0x11 == 0x11 {
+					continue
+				}
 				target = dataSymbols[relocation.Symbol.Name]
 				if target == 0 {
 					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)

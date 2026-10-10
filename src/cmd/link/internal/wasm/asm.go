@@ -76,7 +76,6 @@ func readWasmImport(ldr *loader.Loader, s loader.Sym) obj.WasmImport {
 }
 
 var wasmFuncTypes = map[string]*wasmFuncType{
-	"_cgo_topofstack":         {Results: []byte{I32}},
 	"_rt0_wasm_js":            {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1":        {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1_lib":    {Params: []byte{}},                                         //
@@ -272,9 +271,11 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	hasChannelBase := false
 	hasCTLSBase := len(ctxt.WasmTLSTemplate) != 0
 	dataAddressGlobalNames := make(map[string]string)
+	var cgoTopofstackGoIndex uint32
 	for _, fn := range ctxt.Textp {
 		if ldr.SymName(fn) == "_cgo_topofstack" {
-			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
+			cgoTopofstackGoIndex = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
+			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports) + len(ctxt.Textp))
 		}
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
 			if _, exists := hostFunctionIndices[host.Function.Name]; exists {
@@ -358,6 +359,16 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 				}
 				memoryAddresses[name] = uint32(address)
 			}
+			for _, relocation := range host.Object.CodeRelocations {
+				if relocation.Offset < host.Function.BodyOffset || uint64(relocation.Offset) >= uint64(host.Function.BodyOffset)+uint64(len(host.Function.Body)) {
+					continue
+				}
+				if (relocation.Type == 3 || relocation.Type == 4 || relocation.Type == 5 || relocation.Type == 11) && relocation.Symbol.Flags&0x11 == 0x11 {
+					if _, defined := memoryAddresses[relocation.Symbol.Name]; !defined {
+						memoryAddresses[relocation.Symbol.Name] = 0
+					}
+				}
+			}
 			typeIndices := make(map[uint32]uint32)
 			for index, signature := range host.Object.Types {
 				typeIndices[uint32(index)] = lookupType(&wasmFuncType{Params: signature.Params, Results: signature.Results}, &types)
@@ -428,9 +439,23 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			}
 			typ = lookupType(t, &types)
 		}
+		if buildcfg.GOOS == "kandelo" && ldr.SymName(fn) == "_cgo_topofstack" {
+			typ = 0
+		}
 
 		name := nameRegexp.ReplaceAllString(ldr.SymName(fn), "_")
 		fns[i] = &wasmFunc{Name: name, Type: typ, Code: wfn.Bytes()}
+	}
+
+	if cgoTopofstackGoIndex != 0 {
+		var body bytes.Buffer
+		writeUleb128(&body, 0)
+		writeI32Const(&body, 0)
+		body.WriteByte(0x10)
+		writeUleb128(&body, uint64(cgoTopofstackGoIndex))
+		body.WriteByte(0x0b)
+		wrapperType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
+		fns = append(fns, &wasmFunc{Name: "_cgo_topofstack_cabi", Type: wrapperType, Code: body.Bytes()})
 	}
 
 	// abiVersionFuncIdx is the WebAssembly function index of the synthesized
