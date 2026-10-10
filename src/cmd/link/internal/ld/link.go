@@ -104,6 +104,7 @@ type Link struct {
 	WasmTLSMainSym      loader.Sym
 	WasmTLSAlign        uint32
 	WasmDataTableRelocs []WasmDataTableReloc
+	WasmInitFunctions   []WasmInitFunction
 	Moduledata          loader.Sym
 
 	PackageFile  map[string]string

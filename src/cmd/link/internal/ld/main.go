@@ -363,6 +363,13 @@ func Main(arch *sys.Arch, theArch Arch) {
 	}
 	bench.Start("loadlib")
 	ctxt.loadlib()
+	if ctxt.HeadType == objabi.Hkandelo {
+		if iscgo {
+			ctxt.prepareWasmInitFunctions()
+		} else if len(ctxt.WasmInitFunctions) != 0 {
+			Errorf("Wasm constructor functions require the Kandelo cgo runtime")
+		}
+	}
 
 	bench.Start("inittasks")
 	ctxt.inittasks()

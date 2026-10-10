@@ -62,9 +62,15 @@ type ElementSegment struct {
 	Functions []uint32
 }
 
+type InitFunction struct {
+	Priority uint32
+	Symbol   Symbol
+}
+
 type Object struct {
 	Sections        []Section
 	Symbols         []Symbol
+	InitFunctions   []InitFunction
 	CodeRelocations []Relocation
 	DataRelocations []Relocation
 	Types           []FuncType
@@ -301,6 +307,47 @@ func symbolTable(data []byte, sections []Section, imported map[byte][]string) ([
 		}
 	}
 	return symbols, nil
+}
+
+func initFunctions(data []byte, symbols []Symbol) ([]InitFunction, error) {
+	input := reader{data: data}
+	version, err := input.unsigned()
+	if err != nil || version != 2 {
+		return nil, fmt.Errorf("unsupported Wasm linking version %d", version)
+	}
+	var functions []InitFunction
+	for input.offset < len(input.data) {
+		kind, err := input.byte()
+		if err != nil {
+			return nil, err
+		}
+		subsection, err := input.section()
+		if err != nil {
+			return nil, err
+		}
+		if kind != 6 {
+			continue
+		}
+		count, err := subsection.unsigned()
+		if err != nil || uint64(count) > uint64(len(subsection.data))/2 {
+			return nil, fmt.Errorf("invalid Wasm init function count")
+		}
+		for range count {
+			priority, err := subsection.unsigned()
+			if err != nil {
+				return nil, err
+			}
+			symbolIndex, err := subsection.unsigned()
+			if err != nil || int(symbolIndex) >= len(symbols) || symbols[symbolIndex].Kind != 0 {
+				return nil, fmt.Errorf("invalid Wasm init function symbol index %d", symbolIndex)
+			}
+			functions = append(functions, InitFunction{Priority: priority, Symbol: symbols[symbolIndex]})
+		}
+		if err = subsection.done(); err != nil {
+			return nil, err
+		}
+	}
+	return functions, nil
 }
 
 func dataSegments(data []byte) ([]DataSegment, error) {
@@ -778,6 +825,10 @@ func Parse(data []byte) (*Object, error) {
 		return nil, err
 	}
 	object.Symbols, err = symbolTable(linking, object.Sections, imported)
+	if err != nil {
+		return nil, err
+	}
+	object.InitFunctions, err = initFunctions(linking, object.Symbols)
 	if err != nil {
 		return nil, err
 	}

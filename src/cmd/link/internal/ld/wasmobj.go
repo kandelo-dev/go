@@ -6,10 +6,17 @@ import (
 	"cmd/link/internal/loader"
 	"cmd/link/internal/loadwasm"
 	"cmd/link/internal/sym"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
+
+type WasmInitFunction struct {
+	Priority uint32
+	Target   loader.Sym
+}
 
 func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name string) {
 	if length < 0 || length > 1<<30 {
@@ -310,5 +317,63 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 				ctxt.loader.SetAttrReachable(target, true)
 			}
 		}
+	}
+	for _, initializer := range object.InitFunctions {
+		target := functionSymbolsByName[initializer.Symbol.Name]
+		if target == 0 || ctxt.loader.SymType(target) != sym.STEXT {
+			Errorf("%s: invalid Wasm constructor target %s", name, initializer.Symbol.Name)
+			return
+		}
+		if len(initializer.Symbol.Name) == 0 {
+			Errorf("%s: unnamed Wasm constructor", name)
+			return
+		}
+		ctxt.WasmInitFunctions = append(ctxt.WasmInitFunctions, WasmInitFunction{Priority: initializer.Priority, Target: target})
+	}
+}
+
+func (ctxt *Link) prepareWasmInitFunctions() {
+	if len(ctxt.WasmInitFunctions) > 65536 {
+		Errorf("too many Wasm constructor functions")
+		return
+	}
+	if ctxt.WasmDataSymbols == nil {
+		ctxt.WasmDataSymbols = make(map[string]loader.Sym)
+	}
+	sort.SliceStable(ctxt.WasmInitFunctions, func(first, second int) bool {
+		return ctxt.WasmInitFunctions[first].Priority < ctxt.WasmInitFunctions[second].Priority
+	})
+	count := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport("__kandelo_cgo_ctor_count", 0))
+	count.SetType(sym.SNOPTRDATA)
+	count.SetData(binary.LittleEndian.AppendUint32(nil, uint32(len(ctxt.WasmInitFunctions))))
+	count.SetSize(4)
+	count.SetAlign(4)
+	count.SetExternal(true)
+	ctxt.loader.SetAttrReachable(count.Sym(), true)
+	ctxt.WasmDataSymbols["__kandelo_cgo_ctor_count"] = count.Sym()
+	dsoHandle := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport("__dso_handle", 0))
+	if dsoHandle.Type() == 0 || dsoHandle.Type() == sym.SXREF {
+		dsoHandle.SetType(sym.SNOPTRDATA)
+		dsoHandle.SetData(make([]byte, 4))
+		dsoHandle.SetSize(4)
+		dsoHandle.SetAlign(4)
+		dsoHandle.SetExternal(true)
+	}
+	ctxt.loader.SetAttrReachable(dsoHandle.Sym(), true)
+	ctxt.WasmDataSymbols["__dso_handle"] = dsoHandle.Sym()
+	table := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport("__kandelo_cgo_ctors", 0))
+	table.SetType(sym.SNOPTRDATA)
+	table.SetData(make([]byte, max(4, 4*len(ctxt.WasmInitFunctions))))
+	table.SetSize(int64(max(4, 4*len(ctxt.WasmInitFunctions))))
+	table.SetAlign(4)
+	table.SetExternal(true)
+	ctxt.loader.SetAttrReachable(table.Sym(), true)
+	ctxt.WasmDataSymbols["__kandelo_cgo_ctors"] = table.Sym()
+	for index, initializer := range ctxt.WasmInitFunctions {
+		edge, _ := table.AddRel(objabi.R_ADDR)
+		edge.SetOff(int32(4 * index))
+		edge.SetSiz(4)
+		edge.SetSym(initializer.Target)
+		ctxt.WasmDataTableRelocs = append(ctxt.WasmDataTableRelocs, WasmDataTableReloc{Segment: table.Sym(), Offset: uint32(4 * index), Target: initializer.Target})
 	}
 }

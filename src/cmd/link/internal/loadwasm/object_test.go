@@ -50,6 +50,33 @@ func testObjectWithRelocation(kind byte) []byte {
 	return appendSection(data, 0, append(appendName(nil, "reloc.CODE"), relocations...))
 }
 
+func testObjectWithInit(symbolIndex uint64) []byte {
+	data := []byte("\x00asm\x01\x00\x00\x00")
+	data = appendSection(data, 1, []byte{1, 0x60, 0, 0})
+	data = appendSection(data, 3, []byte{1, 0})
+	data = appendSection(data, 10, []byte{1, 2, 0, 0x0b})
+	symbols := appendName([]byte{1, 0, 0, 0}, "constructor")
+	initializers := appendUnsigned([]byte{1}, 65535)
+	initializers = appendUnsigned(initializers, symbolIndex)
+	linking := appendUnsigned(nil, 2)
+	linking = appendSection(linking, 6, initializers)
+	linking = appendSection(linking, 8, symbols)
+	return appendSection(data, 0, append(appendName(nil, "linking"), linking...))
+}
+
+func TestInitFunctions(t *testing.T) {
+	object, err := Parse(testObjectWithInit(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.InitFunctions) != 1 || object.InitFunctions[0].Priority != 65535 || object.InitFunctions[0].Symbol.Name != "constructor" {
+		t.Fatalf("unexpected Wasm initializer: %+v", object.InitFunctions)
+	}
+	if _, err := Parse(testObjectWithInit(1)); err == nil {
+		t.Fatal("accepted initializer with missing symbol")
+	}
+}
+
 func testObjectWithData() []byte {
 	data := []byte("\x00asm\x01\x00\x00\x00")
 	data = appendSection(data, 1, []byte{1, 0x60, 0, 0})
