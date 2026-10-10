@@ -18,6 +18,7 @@ import (
 	"internal/buildcfg"
 	"io"
 	"regexp"
+	"sort"
 )
 
 const (
@@ -62,6 +63,11 @@ type wasmFuncType struct {
 	Results []byte
 }
 
+type wasmDataAddressGlobal struct {
+	Name    string
+	Address uint32
+}
+
 func readWasmImport(ldr *loader.Loader, s loader.Sym) obj.WasmImport {
 	var wi obj.WasmImport
 	wi.Read(ldr.Data(s))
@@ -69,7 +75,7 @@ func readWasmImport(ldr *loader.Loader, s loader.Sym) obj.WasmImport {
 }
 
 var wasmFuncTypes = map[string]*wasmFuncType{
-	"_cgo_topofstack":        {Results: []byte{I32}},
+	"_cgo_topofstack":         {Results: []byte{I32}},
 	"_rt0_wasm_js":            {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1":        {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1_lib":    {Params: []byte{}},                                         //
@@ -190,14 +196,29 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	var buildid []byte
 	fns := make([]*wasmFunc, len(ctxt.Textp))
 	hostFunctionIndices := make(map[string]uint32)
+	globalDataAddresses := make(map[string]uint32)
 	hasMemoryBase := false
 	hasTableBase := false
 	hasStackPointer := false
+	dataAddressGlobalNames := make(map[string]bool)
 	for _, fn := range ctxt.Textp {
 		if ldr.SymName(fn) == "_cgo_topofstack" {
 			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
 		}
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
+			for _, symbol := range host.Object.Symbols {
+				if symbol.Kind != 1 || symbol.Flags&0x10 != 0 || symbol.Flags&2 != 0 {
+					continue
+				}
+				address := ldr.SymValue(host.DataSymbols[symbol.Name])
+				if address < 0 || address > 1<<32-1 {
+					ld.Exitf("Wasm data symbol %s has invalid address %d", symbol.Name, address)
+				}
+				if previous, exists := globalDataAddresses[symbol.Name]; exists && previous != uint32(address) {
+					ld.Exitf("duplicate Wasm data symbol name %s", symbol.Name)
+				}
+				globalDataAddresses[symbol.Name] = uint32(address)
+			}
 			if _, exists := hostFunctionIndices[host.Function.Name]; exists {
 				ld.Exitf("duplicate Wasm host function name %s", host.Function.Name)
 			}
@@ -211,10 +232,27 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 						hasTableBase = true
 					case "__stack_pointer":
 						hasStackPointer = true
+					case "__tls_base":
+						ld.Exitf("Wasm C TLS base requires per-thread TLS linking")
+					default:
+						dataAddressGlobalNames[relocation.Symbol.Name] = true
 					}
 				}
 			}
 		}
+	}
+	var dataAddressGlobalNamesSorted []string
+	for name := range dataAddressGlobalNames {
+		dataAddressGlobalNamesSorted = append(dataAddressGlobalNamesSorted, name)
+	}
+	sort.Strings(dataAddressGlobalNamesSorted)
+	dataAddressGlobals := make([]wasmDataAddressGlobal, 0, len(dataAddressGlobalNamesSorted))
+	for _, name := range dataAddressGlobalNamesSorted {
+		address, ok := globalDataAddresses[name]
+		if !ok {
+			ld.Exitf("unresolved Wasm data-address global %s", name)
+		}
+		dataAddressGlobals = append(dataAddressGlobals, wasmDataAddressGlobal{Name: name, Address: address})
 	}
 	for i, fn := range ctxt.Textp {
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
@@ -232,8 +270,16 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			}
 			if hasStackPointer {
 				globalIndices["__stack_pointer"] = nextGlobal
+				nextGlobal++
 			}
-			memoryAddresses := make(map[string]uint32)
+			for _, addressGlobal := range dataAddressGlobals {
+				globalIndices[addressGlobal.Name] = nextGlobal
+				nextGlobal++
+			}
+			memoryAddresses := make(map[string]uint32, len(globalDataAddresses)+len(host.DataSymbols))
+			for name, address := range globalDataAddresses {
+				memoryAddresses[name] = address
+			}
 			for name, symbol := range host.DataSymbols {
 				address := ldr.SymValue(symbol)
 				if address < 0 || address > 1<<32-1 {
@@ -392,7 +438,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// memory section.
 		writeMemorySec(ctxt, ldr)
 	}
-	writeGlobalSec(ctxt, ldr, hasMemoryBase, hasTableBase, hasStackPointer)
+	writeGlobalSec(ctxt, ldr, hasMemoryBase, hasTableBase, hasStackPointer, dataAddressGlobals)
 	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx, hasMemoryBase, hasTableBase, hasStackPointer)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
@@ -558,7 +604,7 @@ func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
 }
 
 // writeGlobalSec writes the section that declares global variables.
-func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBase, hasStackPointer bool) {
+func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBase, hasStackPointer bool, dataAddressGlobals []wasmDataAddressGlobal) {
 	sizeOffset := writeSecHeader(ctxt, sectionGlobal)
 
 	globalRegs := []byte{
@@ -597,6 +643,7 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 		if hasStackPointer {
 			numGlobals++
 		}
+		numGlobals += len(dataAddressGlobals)
 	}
 
 	writeUleb128(ctxt.Out, uint64(numGlobals)) // number of globals
@@ -660,6 +707,12 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 			ctxt.Out.WriteByte(I32)
 			ctxt.Out.WriteByte(0x01)
 			writeI32Const(ctxt.Out, 0)
+			ctxt.Out.WriteByte(0x0b)
+		}
+		for _, addressGlobal := range dataAddressGlobals {
+			ctxt.Out.WriteByte(I32)
+			ctxt.Out.WriteByte(0x00)
+			writeI32Const(ctxt.Out, int32(addressGlobal.Address))
 			ctxt.Out.WriteByte(0x0b)
 		}
 	}
