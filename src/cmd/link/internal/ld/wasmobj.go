@@ -205,7 +205,7 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 	functionsToLoad := append([]loadwasm.Function(nil), object.Functions...)
 	for _, function := range object.Functions {
 		for _, symbol := range object.Symbols {
-			if symbol.Kind == 0 && symbol.Flags&0x12 == 0 && symbol.Index == function.Index && symbol.Name != function.Name {
+			if symbol.Kind == 0 && symbol.Flags&0x10 == 0 && symbol.Index == function.Index && symbol.Name != function.Name {
 				alias := function
 				alias.Name = symbol.Name
 				functionsToLoad = append(functionsToLoad, alias)
@@ -267,7 +267,10 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			}
 			target := loader.Sym(0)
 			if (relocation.Type == 0 || relocation.Type == 1 || relocation.Type == 2 || relocation.Type == 12) && relocation.Symbol.Flags&2 != 0 && relocation.Symbol.Flags&0x10 == 0 {
-				target = functionSymbols[relocation.Symbol.Index]
+				target = functionSymbolsByName[relocation.Symbol.Name]
+				if target == 0 {
+					target = functionSymbols[relocation.Symbol.Index]
+				}
 			} else if relocation.Type == 0 || relocation.Type == 1 || relocation.Type == 2 || relocation.Type == 12 {
 				target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 			} else if relocation.Type == 3 || relocation.Type == 4 || relocation.Type == 5 || relocation.Type == 11 {
@@ -283,6 +286,8 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 				if target == 0 {
 					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 				}
+			} else if relocation.Type == 7 && relocation.Symbol.Kind == 0 {
+				target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 			} else {
 				continue
 			}
@@ -301,7 +306,7 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			edge.SetOff(int32(relocation.Offset - function.BodyOffset))
 			edge.SetSiz(4)
 			edge.SetSym(target)
-			if edgeType == objabi.R_CALL {
+			if edgeType == objabi.R_CALL || relocation.Type == 7 && relocation.Symbol.Kind == 0 {
 				ctxt.loader.SetAttrReachable(target, true)
 			}
 		}

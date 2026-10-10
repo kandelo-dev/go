@@ -181,6 +181,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// 0 if the function returned normally or
 		// 1 if the stack needs to be unwound.
 		{Params: []byte{I32}, Results: []byte{I32}},
+		{Params: []byte{I32}},
 	}
 
 	// collect host imports (functions that get imported from the WebAssembly host, usually JavaScript)
@@ -314,7 +315,11 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	for _, name := range dataAddressGlobalNamesSorted {
 		address, ok := globalDataAddresses[name]
 		if !ok {
-			ld.Exitf("unresolved Wasm data-address global %s referenced by %s", name, dataAddressGlobalNames[name])
+			function := ldr.Lookup(name, 0)
+			if function == 0 || ldr.SymType(function) != sym.STEXT || !ldr.AttrReachable(function) {
+				ld.Exitf("unresolved Wasm data-address global %s referenced by %s (symbol=%d type=%v reachable=%t)", name, dataAddressGlobalNames[name], function, ldr.SymType(function), ldr.AttrReachable(function))
+			}
+			address = uint32(ldr.SymValue(function) >> 16)
 		}
 		dataAddressGlobals = append(dataAddressGlobals, wasmDataAddressGlobal{Name: name, Address: address})
 	}
@@ -858,7 +863,11 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 		if hasStackPointer {
 			ctxt.Out.WriteByte(I32)
 			ctxt.Out.WriteByte(0x01)
-			writeI32Const(ctxt.Out, 0)
+			cStack := ldr.Lookup("runtime.cgoCStack", 0)
+			if cStack == 0 || !ldr.AttrReachable(cStack) {
+				ld.Exitf("GOOS=kandelo: C stack is not linked")
+			}
+			writeI32Const(ctxt.Out, int32(ldr.SymValue(cStack)+int64(ldr.SymSize(cStack))))
 			ctxt.Out.WriteByte(0x0b)
 		}
 		if hasCTLSBase {

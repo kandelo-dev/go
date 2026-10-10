@@ -3,10 +3,25 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"go/ast"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestKandeloWasmCgoFrameLayout(t *testing.T) {
+	previousOS, previousArch := goos, goarch
+	goos, goarch = "kandelo", "wasm"
+	t.Cleanup(func() { goos, goarch = previousOS, previousArch })
+	integer := &Type{Size: 4, Align: 4, C: c("int"), Go: ast.NewIdent("int32")}
+	pointer := &Type{Size: 4, Align: 4, C: c("int*"), Go: &ast.StarExpr{X: ast.NewIdent("int32")}}
+	name := &Name{FuncType: &FuncType{Params: []*Type{integer, pointer, integer}, Result: integer}}
+	layout, size := (&Package{PtrSize: 4}).structType(name)
+	if size != 32 || !strings.Contains(layout, "__pad4[4]") || !strings.Contains(layout, "__pad12[4]") || !strings.Contains(layout, "__pad20[4]") {
+		t.Fatalf("unexpected Go/C frame layout: size %d, struct %s", size, layout)
+	}
+}
 
 func wasmTestSection(sectionID byte, payload []byte) []byte {
 	section := []byte{sectionID}

@@ -288,7 +288,31 @@ TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
 	JMP runtime·morestack(SB)
 
 TEXT ·asmcgocall(SB), NOSPLIT, $0-0
-	UNDEF
+	MOVD g_m(g), R2
+	MOVD $runtime·m0(SB), R3
+	Get R2
+	Get R3
+	I64Ne
+	If
+		UNDEF
+	End
+	MOVD $runtime·cgoCStack+(8<<20)(SB), R1
+	Get R1
+	I64Eqz
+	If
+		UNDEF
+	End
+	I64Load fn+0(FP)
+	I64Const $16
+	I64ShrU
+	Set R0
+	I64Load arg+8(FP)
+	I32WrapI64
+	Get R0
+	I32WrapI64
+	CallIndirect $1
+	MOVW $0, ret+16(FP)
+	RET
 
 #ifdef GOOS_kandelo
 TEXT _cgo_topofstack(SB), NOSPLIT|NOFRAME, $0

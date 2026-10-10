@@ -466,9 +466,18 @@ func (p *Package) structType(n *Name) (string, int64) {
 	var buf strings.Builder
 	fmt.Fprint(&buf, "struct {\n")
 	off := int64(0)
+	frameAlignment := p.PtrSize
+	kandeloWasm := goos == "kandelo" && goarch == "wasm"
+	if kandeloWasm {
+		frameAlignment = 8
+	}
 	for i, t := range n.FuncType.Params {
-		if off%t.Align != 0 {
-			pad := t.Align - off%t.Align
+		fieldAlignment := t.Align
+		if kandeloWasm && isCgoPointerType(t.Go) {
+			fieldAlignment = 8
+		}
+		if off%fieldAlignment != 0 {
+			pad := fieldAlignment - off%fieldAlignment
 			fmt.Fprintf(&buf, "\t\tchar __pad%d[%d];\n", off, pad)
 			off += pad
 		}
@@ -478,9 +487,13 @@ func (p *Package) structType(n *Name) (string, int64) {
 		}
 		fmt.Fprintf(&buf, "\t\t%s p%d;\n", c, i)
 		off += t.Size
+		if kandeloWasm && t.Size < 8 && isCgoPointerType(t.Go) {
+			fmt.Fprintf(&buf, "\t\tchar __pad%d[%d];\n", off, 8-t.Size)
+			off = (off + 7) &^ 7
+		}
 	}
-	if off%p.PtrSize != 0 {
-		pad := p.PtrSize - off%p.PtrSize
+	if off%frameAlignment != 0 {
+		pad := frameAlignment - off%frameAlignment
 		fmt.Fprintf(&buf, "\t\tchar __pad%d[%d];\n", off, pad)
 		off += pad
 	}
@@ -493,8 +506,8 @@ func (p *Package) structType(n *Name) (string, int64) {
 		fmt.Fprintf(&buf, "\t\t%s r;\n", t.C)
 		off += t.Size
 	}
-	if off%p.PtrSize != 0 {
-		pad := p.PtrSize - off%p.PtrSize
+	if off%frameAlignment != 0 {
+		pad := frameAlignment - off%frameAlignment
 		fmt.Fprintf(&buf, "\t\tchar __pad%d[%d];\n", off, pad)
 		off += pad
 	}
@@ -503,6 +516,18 @@ func (p *Package) structType(n *Name) (string, int64) {
 	}
 	fmt.Fprintf(&buf, "\t}")
 	return buf.String(), off
+}
+
+func isCgoPointerType(expr ast.Expr) bool {
+	switch typed := expr.(type) {
+	case *ast.StarExpr:
+		return true
+	case *ast.SelectorExpr:
+		name, ok := typed.X.(*ast.Ident)
+		return ok && name.Name == "unsafe" && typed.Sel.Name == "Pointer"
+	default:
+		return false
+	}
 }
 
 func (p *Package) writeDefsFunc(fgo2 io.Writer, n *Name, callsMalloc *bool) {
