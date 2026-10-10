@@ -16,6 +16,7 @@ func fillFileStatFromSys(fs *fileStat, name string) {
 	fs.name = filepathlite.Base(name)
 	fs.size = int64(fs.sys.Size)
 	fs.modTime = time.Unix(0, int64(fs.sys.Mtime))
+	fs.mode = FileMode(fs.sys.Mode & 0o777)
 
 	switch fs.sys.Filetype {
 	case syscall.FILETYPE_BLOCK_DEVICE:
@@ -24,6 +25,10 @@ func fillFileStatFromSys(fs *fileStat, name string) {
 		fs.mode |= ModeDevice | ModeCharDevice
 	case syscall.FILETYPE_DIRECTORY:
 		fs.mode |= ModeDir
+	case syscall.FILETYPE_UNKNOWN:
+		if fs.sys.Mode&0o170000 == syscall.S_IFIFO {
+			fs.mode |= ModeNamedPipe
+		}
 	case syscall.FILETYPE_SOCKET_DGRAM:
 		fs.mode |= ModeSocket
 	case syscall.FILETYPE_SOCKET_STREAM:
@@ -32,13 +37,14 @@ func fillFileStatFromSys(fs *fileStat, name string) {
 		fs.mode |= ModeSymlink
 	}
 
-	// WASI does not support unix-like permissions, but Go programs are likely
-	// to expect the permission bits to not be zero so we set defaults to help
-	// avoid breaking applications that are migrating to WASM.
-	if fs.sys.Filetype == syscall.FILETYPE_DIRECTORY {
-		fs.mode |= 0700
-	} else {
-		fs.mode |= 0600
+	if fs.sys.Mode&syscall.S_ISGID != 0 {
+		fs.mode |= ModeSetgid
+	}
+	if fs.sys.Mode&syscall.S_ISUID != 0 {
+		fs.mode |= ModeSetuid
+	}
+	if fs.sys.Mode&syscall.S_ISVTX != 0 {
+		fs.mode |= ModeSticky
 	}
 }
 

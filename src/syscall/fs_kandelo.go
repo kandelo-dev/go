@@ -9,7 +9,7 @@
 // handshake (kandeloSyscall6 in channel_kandelo.go) using kernel/musl syscall
 // numbers. The fd_* read/write/seek/close/stat leaves and the path-based
 // Open/Openat/Stat/Lstat calls are implemented; some path operations
-// (readdir, and the WASI path_* rights helpers) remain ENOSYS stubs pending
+// (the WASI path_* rights helpers) remain ENOSYS stubs pending
 // later milestones.
 
 package syscall
@@ -218,7 +218,12 @@ func fd_read(fd int32, iovs *iovec, iovsLen size, nread *size) Errno {
 }
 
 func fd_readdir(fd int32, buf *byte, bufLen size, cookie dircookie, nwritten *size) Errno {
-	return ENOSYS
+	result, errno := kandeloSyscall6(kSysGetdents64, int64(fd), int64(uintptr(unsafe.Pointer(buf))), int64(bufLen), 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	*nwritten = size(result)
+	return 0
 }
 
 func fd_seek(fd int32, offset filedelta, whence uint32, newoffset *filesize) Errno {
@@ -690,9 +695,16 @@ func Mkdirat(dirFd int, path string, perm uint32) error {
 }
 
 func ReadDir(fd int, buf []byte, cookie dircookie) (int, error) {
+	if len(buf) == 0 {
+		return 0, EINVAL
+	}
 	var nwritten size
 	errno := fd_readdir(int32(fd), &buf[0], size(len(buf)), cookie, &nwritten)
 	return int(nwritten), errnoErr(errno)
+}
+
+func ReadDirent(fd int, buf []byte) (int, error) {
+	return ReadDir(fd, buf, 0)
 }
 
 type Stat_t struct {
@@ -707,7 +719,6 @@ type Stat_t struct {
 
 	Mode int
 
-	// Uid and Gid are always zero on kandelo platforms
 	Uid uint32
 	Gid uint32
 }
@@ -747,17 +758,6 @@ func Lstat(path string, st *Stat_t) error {
 func Fstat(fd int, st *Stat_t) error {
 	errno := fd_filestat_get(int32(fd), unsafe.Pointer(st))
 	return errnoErr(errno)
-}
-
-func setDefaultMode(st *Stat_t) {
-	// WASI does not support unix-like permissions, but Go programs are likely
-	// to expect the permission bits to not be zero so we set defaults to help
-	// avoid breaking applications that are migrating to WASM.
-	if st.Filetype == FILETYPE_DIRECTORY {
-		st.Mode = 0700
-	} else {
-		st.Mode = 0600
-	}
 }
 
 func Unlink(path string) error {
@@ -817,15 +817,34 @@ func Fchmodat(dirFd int, path string, mode uint32, flags int) error {
 }
 
 func Chown(path string, uid, gid int) error {
-	return ENOSYS
+	if path == "" {
+		return ENOENT
+	}
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysChown, ptr, int64(uid), int64(gid), 0, 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Fchown(fd int, uid, gid int) error {
-	return ENOSYS
+	_, errno := kandeloSyscall6(kSysFchown, int64(fd), int64(uid), int64(gid), 0, 0, 0)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Lchown(path string, uid, gid int) error {
-	return ENOSYS
+	if path == "" {
+		return ENOENT
+	}
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysFchownat, int64(kAtFdcwd), ptr, int64(uid), int64(gid), aTSymlinkNofollow, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 // Go's UTIME_OMIT sentinel (matches internal/syscall/unix and os _UTIME_OMIT).

@@ -31,29 +31,37 @@ const (
 )
 
 type Dirent struct {
-	// The offset of the next directory entry stored in this directory.
-	Next Dircookie
-	// The serial number of the file referred to by this directory entry.
-	Ino uint64
-	// The length of the name of the directory entry.
-	Namlen uint32
-	// The type of the file referred to by this directory entry.
-	Type Filetype
-	// Name of the directory entry.
-	Name *byte
+	Ino    uint64
+	Off    int64
+	Reclen uint16
+	Type   uint8
+	Name   [1]byte
 }
+
+const (
+	DT_FIFO = 1
+	DT_CHR  = 2
+	DT_DIR  = 4
+	DT_BLK  = 6
+	DT_REG  = 8
+	DT_LNK  = 10
+	DT_SOCK = 12
+)
 
 func direntIno(buf []byte) (uint64, bool) {
 	return readInt(buf, unsafe.Offsetof(Dirent{}.Ino), unsafe.Sizeof(Dirent{}.Ino))
 }
 
 func direntReclen(buf []byte) (uint64, bool) {
-	namelen, ok := direntNamlen(buf)
-	return 24 + namelen, ok
+	return readInt(buf, unsafe.Offsetof(Dirent{}.Reclen), unsafe.Sizeof(Dirent{}.Reclen))
 }
 
 func direntNamlen(buf []byte) (uint64, bool) {
-	return readInt(buf, unsafe.Offsetof(Dirent{}.Namlen), unsafe.Sizeof(Dirent{}.Namlen))
+	reclen, ok := direntReclen(buf)
+	if !ok {
+		return 0, false
+	}
+	return reclen - uint64(unsafe.Offsetof(Dirent{}.Name)), true
 }
 
 // An Errno is an unsigned number describing an error condition.
