@@ -96,6 +96,7 @@ type Link struct {
 	Shlibs            []Shlib
 	Textp             []loader.Sym
 	WasmHostFunctions map[loader.Sym]WasmHostFunction
+	WasmDataSymbols   map[string]loader.Sym
 	Moduledata        loader.Sym
 
 	PackageFile  map[string]string

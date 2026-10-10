@@ -42,6 +42,9 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		}
 	}
 	version := ctxt.IncVersion()
+	if ctxt.WasmDataSymbols == nil {
+		ctxt.WasmDataSymbols = make(map[string]loader.Sym)
+	}
 	dataSymbols := make(map[string]loader.Sym)
 	segmentBuilders := make([]*loader.SymbolBuilder, len(object.DataSegments))
 	for index, segment := range object.DataSegments {
@@ -56,6 +59,7 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		builder.SetSize(int64(len(segment.Data)))
 		builder.SetAlign(int32(segment.Align))
 		builder.SetExternal(true)
+		ctxt.loader.SetAttrReachable(builder.Sym(), true)
 		segmentBuilders[index] = builder
 	}
 	for _, symbol := range object.Symbols {
@@ -81,6 +85,9 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		builder.SetExternal(true)
 		segmentBuilders[symbol.Index].AddInteriorSym(builder.Sym())
 		dataSymbols[symbol.Name] = builder.Sym()
+		if symbol.Flags&2 == 0 {
+			ctxt.WasmDataSymbols[symbol.Name] = builder.Sym()
+		}
 	}
 	for _, builder := range segmentBuilders {
 		builder.SortSub()
@@ -157,6 +164,11 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			} else if relocation.Type == 0 || relocation.Type == 1 || relocation.Type == 2 || relocation.Type == 12 {
 				target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
 			} else if relocation.Type == 3 || relocation.Type == 4 || relocation.Type == 5 || relocation.Type == 11 {
+				target = dataSymbols[relocation.Symbol.Name]
+				if target == 0 {
+					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
+				}
+			} else if relocation.Type == 7 && relocation.Symbol.Kind == 2 && relocation.Symbol.Name != "__memory_base" && relocation.Symbol.Name != "__table_base" && relocation.Symbol.Name != "__stack_pointer" && relocation.Symbol.Name != "__tls_base" {
 				target = dataSymbols[relocation.Symbol.Name]
 				if target == 0 {
 					target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)

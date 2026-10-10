@@ -197,6 +197,13 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	fns := make([]*wasmFunc, len(ctxt.Textp))
 	hostFunctionIndices := make(map[string]uint32)
 	globalDataAddresses := make(map[string]uint32)
+	for name, symbol := range ctxt.WasmDataSymbols {
+		address := ldr.SymValue(symbol)
+		if address <= 0 || address > 1<<32-1 {
+			ld.Exitf("Wasm data symbol %s has invalid address %d", name, address)
+		}
+		globalDataAddresses[name] = uint32(address)
+	}
 	hasMemoryBase := false
 	hasTableBase := false
 	hasStackPointer := false
@@ -206,19 +213,6 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
 		}
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
-			for _, symbol := range host.Object.Symbols {
-				if symbol.Kind != 1 || symbol.Flags&0x10 != 0 || symbol.Flags&2 != 0 {
-					continue
-				}
-				address := ldr.SymValue(host.DataSymbols[symbol.Name])
-				if address < 0 || address > 1<<32-1 {
-					ld.Exitf("Wasm data symbol %s has invalid address %d", symbol.Name, address)
-				}
-				if previous, exists := globalDataAddresses[symbol.Name]; exists && previous != uint32(address) {
-					ld.Exitf("duplicate Wasm data symbol name %s", symbol.Name)
-				}
-				globalDataAddresses[symbol.Name] = uint32(address)
-			}
 			if _, exists := hostFunctionIndices[host.Function.Name]; exists {
 				ld.Exitf("duplicate Wasm host function name %s", host.Function.Name)
 			}
