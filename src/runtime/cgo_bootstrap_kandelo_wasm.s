@@ -32,7 +32,7 @@ TEXT runtime·kandeloCgoReadChannelBase(SB), NOSPLIT, $0-8
 	CallIndirect $1
 	RET
 
-TEXT runtime·cgoCallbackKandeloForeign(SB), NOSPLIT, $0-24
+TEXT runtime·cgoCallbackKandeloForeign(SB), NOSPLIT|TOPFRAME, $0-24
 	MOVD fn+0(FP), R0
 	MOVD frame+8(FP), R1
 	MOVD ctxt+16(FP), R2
