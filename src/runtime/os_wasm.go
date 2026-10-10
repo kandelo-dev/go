@@ -52,7 +52,7 @@ type mOS struct {
 	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
 	channelBase    uintptr
 	cgoChannelBase uint32
-	callbackCurgSP uintptr
+	callbackCurgStackOffset uintptr
 	callbackCurgPC uintptr
 	callbackG0SP   uintptr
 	foreignCStackActive uintptr

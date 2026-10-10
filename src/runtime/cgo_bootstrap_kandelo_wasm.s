@@ -39,8 +39,12 @@ TEXT runtime·cgoCallbackKandeloForeign(SB), NOSPLIT|TOPFRAME, $0-24
 	MOVD g_m(g), R3
 	MOVD m_curg(R3), R4
 	MOVD m_g0(R3), R5
-	MOVD (g_sched+gobuf_sp)(R4), R6
-	MOVD R6, (m_mOS+mOS_callbackCurgSP)(R3)
+	MOVD (g_stack+stack_hi)(R4), R6
+	Get R6
+	I64Load (g_sched+gobuf_sp)(R4)
+	I64Sub
+	Set R6
+	MOVD R6, (m_mOS+mOS_callbackCurgStackOffset)(R3)
 	MOVD (g_sched+gobuf_pc)(R4), R6
 	MOVD R6, (m_mOS+mOS_callbackCurgPC)(R3)
 	MOVD (g_sched+gobuf_sp)(R5), R6
@@ -54,7 +58,11 @@ TEXT runtime·cgoCallbackKandeloForeign(SB), NOSPLIT|TOPFRAME, $0-24
 	MOVD R2, 16(SP)
 	CALL runtime·cgocallbackg(SB)
 	MOVD g_m(g), R3
-	MOVD (m_mOS+mOS_callbackCurgSP)(R3), R6
+	MOVD (g_stack+stack_hi)(g), R6
+	Get R6
+	I64Load (m_mOS+mOS_callbackCurgStackOffset)(R3)
+	I64Sub
+	Set R6
 	MOVD R6, (g_sched+gobuf_sp)(g)
 	MOVD (m_mOS+mOS_callbackCurgPC)(R3), R6
 	MOVD R6, (g_sched+gobuf_pc)(g)
