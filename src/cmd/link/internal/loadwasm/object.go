@@ -517,7 +517,7 @@ func codeRelocations(data []byte, sections []Section, symbols []Symbol) ([]Reloc
 			relocation.Symbol = symbols[symbolIndex]
 		}
 		switch relocation.Type {
-		case 0, 1, 2, 6, 7, 12, 20:
+		case 0, 1, 2, 6, 7, 10, 12, 20:
 		case 3, 4, 5, 11, 21:
 			relocation.Addend, err = input.signed()
 		default:
@@ -690,6 +690,10 @@ func (object *Object) RelocateFunction(function Function, functionIndices, globa
 		case 21:
 			if len(tlsOffsets) != 0 {
 				target, ok = tlsOffsets[0][relocation.Symbol.Name]
+			}
+		case 10:
+			if len(tlsOffsets) > 1 {
+				target, ok = tlsOffsets[1][relocation.Symbol.Name]
 			}
 		case 20:
 			target, ok = tableNumbers[relocation.Symbol.Name]

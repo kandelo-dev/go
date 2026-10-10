@@ -13,7 +13,9 @@ func cgoCallbackKandelo(fn, frame unsafe.Pointer, ctxt uintptr) {
 	if gp == nil {
 		needm(false)
 		kandeloInitChannelBase()
+		getg().m.mOS.foreignCStackActive = 1
 		cgoCallbackKandeloForeign(fn, frame, ctxt)
+		getg().m.mOS.foreignCStackActive = 0
 		dropm()
 		return
 	}

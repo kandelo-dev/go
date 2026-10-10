@@ -301,7 +301,12 @@ TEXT ·asmcgocall(SB), NOSPLIT, $0-0
 	Get R1
 	I64Eqz
 	If
-		UNDEF
+		MOVD (m_mOS+mOS_foreignCStackActive)(R2), R1
+		Get R1
+		I64Eqz
+		If
+			UNDEF
+		End
 	End
 	I64Load fn+0(FP)
 	I64Const $16

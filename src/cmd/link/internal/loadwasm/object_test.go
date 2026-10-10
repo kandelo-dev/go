@@ -195,6 +195,18 @@ func TestTableFunctionPointerRelocations(t *testing.T) {
 	}
 }
 
+func TestTagRelocation(t *testing.T) {
+	object := &Object{CodeRelocations: []Relocation{{Type: 10, Symbol: Symbol{Kind: 4, Name: "__c_longjmp"}}}}
+	function := Function{Body: []byte{0x80, 0x80, 0x80, 0x80, 0x00}}
+	patched, err := object.RelocateFunction(function, nil, nil, nil, nil, nil, nil, nil, map[string]uint32{"__c_longjmp": 1})
+	if err != nil || patched[0] != 0x81 {
+		t.Fatalf("tag relocation = %x: %v", patched, err)
+	}
+	if function.Body[0] != 0x80 {
+		t.Fatal("relocation modified the source body")
+	}
+}
+
 func TestElementSegments(t *testing.T) {
 	functions := []Function{{Index: 1, Name: "local"}}
 	segments, err := elementSegments([]byte{1, 0, 0x41, 1, 0x0b, 1, 1}, 1, functions)

@@ -620,6 +620,7 @@ func (ctxt *Link) loadlib() {
 	hostlinksetup(ctxt)
 	if ctxt.HeadType == objabi.Hkandelo && ctxt.LinkMode == LinkInternal && iscgo {
 		loadKandeloExecutableGlue(ctxt)
+		loadKandeloCgoArchives(ctxt)
 	}
 
 	if ctxt.LinkMode == LinkInternal && len(hostobj) != 0 {
@@ -1280,6 +1281,55 @@ func loadKandeloExecutableGlue(ctxt *Link) {
 			Exitf("GOOS=kandelo: compile %s glue: %v\n%s", name, err, out)
 		}
 		hostObject(ctxt, "kandelo/"+name, object)
+	}
+}
+
+func loadKandeloCgoArchives(ctxt *Link) {
+	var searchPaths []string
+	var libraries []string
+	linkerFlags := append(append([]string(nil), ldflag...), flagExtldflags...)
+	for index := 0; index < len(linkerFlags); index++ {
+		flag := linkerFlags[index]
+		switch {
+		case flag == "-L" && index+1 < len(linkerFlags):
+			index++
+			searchPaths = append(searchPaths, linkerFlags[index])
+		case strings.HasPrefix(flag, "-L") && len(flag) > 2:
+			searchPaths = append(searchPaths, flag[2:])
+		case flag == "-l" && index+1 < len(linkerFlags):
+			index++
+			libraries = append(libraries, linkerFlags[index])
+		case strings.HasPrefix(flag, "-l") && len(flag) > 2:
+			libraries = append(libraries, flag[2:])
+		case strings.HasSuffix(flag, ".a") && filepath.IsAbs(flag):
+			libraries = append(libraries, flag)
+		}
+	}
+	loaded := make(map[string]bool)
+	for _, library := range libraries {
+		path := library
+		if !filepath.IsAbs(path) {
+			name := "lib" + library + ".a"
+			for _, directory := range searchPaths {
+				candidate := filepath.Join(directory, name)
+				if _, err := os.Stat(candidate); err == nil {
+					path = candidate
+					break
+				}
+			}
+			if path == library {
+				path = ctxt.findLibPath(name)
+			}
+		}
+		if !filepath.IsAbs(path) {
+			Errorf("GOOS=kandelo: C archive %q not found", library)
+			continue
+		}
+		if loaded[path] {
+			continue
+		}
+		loaded[path] = true
+		hostArchive(ctxt, path)
 	}
 }
 

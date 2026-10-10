@@ -20,6 +20,7 @@ import (
 	"io"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 const (
@@ -42,6 +43,7 @@ const (
 	sectionElement  = 9
 	sectionCode     = 10
 	sectionData     = 11
+	sectionTag      = 13
 )
 
 // funcValueOffset is the offset between the PC_F value of a function and the index of the function in WebAssembly
@@ -265,13 +267,79 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			hostImports = append(hostImports, &wasmFunc{Module: "kernel", Name: name, Type: lookupType(&signature, &types)})
 		}
 	}
+	envFunctionNames := map[string]bool{
+		"__wasm_dlclose": true, "__wasm_dlerror": true, "__wasm_dlopen": true,
+		"__wasm_dlopen_commit": true, "__wasm_dlopen_main": true,
+		"__wasm_dlopen_next": true, "__wasm_dlopen_prepare": true,
+		"__wasm_dlsym": true, "__wasm_posix_vm_interrupt_after": true,
+	}
+	envImports := make(map[string]wasmFuncType)
+	for _, host := range ctxt.WasmHostFunctions {
+		for _, importedFunction := range host.Object.FunctionImports {
+			if importedFunction.Module != "env" || !envFunctionNames[importedFunction.Name] {
+				continue
+			}
+			signature := host.Object.Types[importedFunction.TypeIndex]
+			candidate := wasmFuncType{Params: signature.Params, Results: signature.Results}
+			if previous, ok := envImports[importedFunction.Name]; ok && (!bytes.Equal(previous.Params, candidate.Params) || !bytes.Equal(previous.Results, candidate.Results)) {
+				ld.Exitf("conflicting Kandelo env import signature for %s", importedFunction.Name)
+			}
+			envImports[importedFunction.Name] = candidate
+		}
+	}
+	var envImportNames []string
+	for name := range envImports {
+		envImportNames = append(envImportNames, name)
+	}
+	sort.Strings(envImportNames)
+	for _, name := range envImportNames {
+		signature := envImports[name]
+		found := false
+		for _, existing := range hostImports {
+			if existing.Module == "env" && existing.Name == name {
+				previous := types[existing.Type]
+				if !bytes.Equal(previous.Params, signature.Params) || !bytes.Equal(previous.Results, signature.Results) {
+					ld.Exitf("conflicting Go and C env import signature for %s", name)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			hostImports = append(hostImports, &wasmFunc{Module: "env", Name: name, Type: lookupType(&signature, &types)})
+		}
+	}
+	tagImports := make(map[string]uint32)
+	for _, host := range ctxt.WasmHostFunctions {
+		for _, relocation := range host.Object.CodeRelocations {
+			if relocation.Offset < host.Function.BodyOffset || uint64(relocation.Offset) >= uint64(host.Function.BodyOffset)+uint64(len(host.Function.Body)) || relocation.Type != 10 {
+				continue
+			}
+			if relocation.Symbol.Kind != 4 || relocation.Symbol.Name != "__c_longjmp" && relocation.Symbol.Name != "__cpp_exception" {
+				ld.Exitf("unsupported Wasm exception tag %s", relocation.Symbol.Name)
+			}
+			tagImports[relocation.Symbol.Name] = 0
+		}
+	}
+	var tagImportNames []string
+	for name := range tagImports {
+		tagImportNames = append(tagImportNames, name)
+	}
+	sort.Strings(tagImportNames)
+	for index, name := range tagImportNames {
+		tagImports[name] = uint32(index)
+	}
+	var tagTypeIndex uint32
+	if len(tagImportNames) != 0 {
+		tagTypeIndex = lookupType(&wasmFuncType{Params: []byte{I32}}, &types)
+	}
 
 	// collect functions with WebAssembly body
 	var buildid []byte
 	fns := make([]*wasmFunc, len(ctxt.Textp))
 	hostFunctionIndices := make(map[string]uint32)
 	for index, importedFunction := range hostImports {
-		if importedFunction.Module == "kernel" {
+		if importedFunction.Module == "kernel" || importedFunction.Module == "env" {
 			hostFunctionIndices[importedFunction.Name] = uint32(index)
 		}
 	}
@@ -298,6 +366,9 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		hostFunctionIndices[name] = uint32(len(hostImports)) + uint32(ldr.SymValue(exported)>>16) - funcValueOffset
 	}
 	for _, fn := range ctxt.Textp {
+		if name := ldr.SymName(fn); strings.HasPrefix(name, "_cgoexp_") {
+			hostFunctionIndices[name] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
+		}
 		if ldr.SymName(fn) == "_cgo_topofstack" {
 			cgoTopofstackGoIndex = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
 			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports) + len(ctxt.Textp))
@@ -339,11 +410,11 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	for _, name := range dataAddressGlobalNamesSorted {
 		address, ok := globalDataAddresses[name]
 		if !ok {
-			function := ldr.Lookup(name, 0)
-			if function == 0 || ldr.SymType(function) != sym.STEXT || !ldr.AttrReachable(function) {
-				ld.Exitf("unresolved Wasm data-address global %s referenced by %s (symbol=%d type=%v reachable=%t)", name, dataAddressGlobalNames[name], function, ldr.SymType(function), ldr.AttrReachable(function))
+			functionIndex, defined := hostFunctionIndices[name]
+			if !defined || functionIndex < uint32(len(hostImports)) {
+				ld.Exitf("unresolved Wasm data-address global %s referenced by %s", name, dataAddressGlobalNames[name])
 			}
-			address = uint32(ldr.SymValue(function) >> 16)
+			address = functionIndex - uint32(len(hostImports)) + funcValueOffset
 		}
 		dataAddressGlobals = append(dataAddressGlobals, wasmDataAddressGlobal{Name: name, Address: address})
 	}
@@ -413,7 +484,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			for name, offset := range host.TLSSymbols {
 				tlsOffsets[name] = offset
 			}
-			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses, map[string]uint32{"__indirect_function_table": 0}, tableSlots, typeIndices, tlsOffsets)
+			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses, map[string]uint32{"__indirect_function_table": 0}, tableSlots, typeIndices, tlsOffsets, tagImports)
 			if err != nil {
 				ld.Exitf("Wasm host function %s: %v", host.Function.Name, err)
 			}
@@ -604,7 +675,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	}
 
 	writeTypeSec(ctxt, types)
-	writeImportSec(ctxt, ldr, hostImports)
+	writeImportSec(ctxt, ldr, hostImports, tagImportNames, tagTypeIndex)
 	writeFunctionSec(ctxt, fns)
 	writeTableSec(ctxt, fns)
 	if buildcfg.GOOS != "kandelo" {
@@ -679,7 +750,7 @@ func writeTypeSec(ctxt *ld.Link, types []*wasmFuncType) {
 
 // writeImportSec writes the section that lists the functions that get
 // imported from the WebAssembly host, usually JavaScript.
-func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc) {
+func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc, tagImportNames []string, tagTypeIndex uint32) {
 	sizeOffset := writeSecHeader(ctxt, sectionImport)
 
 	// GOOS=kandelo imports its (shared) linear memory from env.memory rather
@@ -691,6 +762,7 @@ func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc) 
 	if importMemory {
 		numImports++
 	}
+	numImports += uint64(len(tagImportNames))
 	writeUleb128(ctxt.Out, numImports) // number of imports
 	for _, fn := range hostImports {
 		if fn.Module != "" {
@@ -728,6 +800,13 @@ func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc) 
 		ctxt.Out.WriteByte(0x03)                // limits flags: has-max (0x01) | shared (0x02)
 		writeUleb128(ctxt.Out, minPages)        // min (initial) pages
 		writeUleb128(ctxt.Out, kandeloMaxPages) // max pages
+	}
+	for _, name := range tagImportNames {
+		writeName(ctxt.Out, "env")
+		writeName(ctxt.Out, name)
+		ctxt.Out.WriteByte(0x04)
+		ctxt.Out.WriteByte(0x00)
+		writeUleb128(ctxt.Out, uint64(tagTypeIndex))
 	}
 
 	writeSecSize(ctxt, sizeOffset)

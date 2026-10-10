@@ -55,6 +55,7 @@ type mOS struct {
 	callbackCurgSP uintptr
 	callbackCurgPC uintptr
 	callbackG0SP   uintptr
+	foreignCStackActive uintptr
 	clockTimespec  [2]int64
 }
 

@@ -44,8 +44,40 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		}
 	}
 	version := ctxt.IncVersion()
+	localFunctionNames := make(map[uint32]string)
+	for _, symbol := range object.Symbols {
+		if symbol.Kind == 0 && symbol.Flags&2 != 0 && symbol.Flags&0x10 == 0 {
+			localFunctionNames[symbol.Index] = fmt.Sprintf("%s$%d", symbol.Name, version)
+		}
+	}
+	for index := range object.Symbols {
+		if symbol := &object.Symbols[index]; symbol.Kind == 0 && symbol.Flags&2 != 0 && symbol.Flags&0x10 == 0 {
+			symbol.Name = localFunctionNames[symbol.Index]
+		}
+	}
+	for index := range object.Functions {
+		if name, ok := localFunctionNames[object.Functions[index].Index]; ok {
+			object.Functions[index].Name = name
+		}
+	}
+	for index := range object.CodeRelocations {
+		if symbol := &object.CodeRelocations[index].Symbol; symbol.Kind == 0 && symbol.Flags&2 != 0 && symbol.Flags&0x10 == 0 {
+			symbol.Name = localFunctionNames[symbol.Index]
+		}
+	}
+	for index := range object.DataRelocations {
+		if symbol := &object.DataRelocations[index].Symbol; symbol.Kind == 0 && symbol.Flags&2 != 0 && symbol.Flags&0x10 == 0 {
+			symbol.Name = localFunctionNames[symbol.Index]
+		}
+	}
+	for index := range object.InitFunctions {
+		if symbol := &object.InitFunctions[index].Symbol; symbol.Kind == 0 && symbol.Flags&2 != 0 && symbol.Flags&0x10 == 0 {
+			symbol.Name = localFunctionNames[symbol.Index]
+		}
+	}
 	if ctxt.WasmDataSymbols == nil {
 		ctxt.WasmDataSymbols = make(map[string]loader.Sym)
+		ctxt.WasmWeakDataSymbols = make(map[loader.Sym]bool)
 	}
 	dataSymbols := make(map[string]loader.Sym)
 	localTLSSymbols := make(map[string]uint32)
@@ -112,22 +144,34 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			return
 		}
 		localVersion := 0
-		if symbol.Flags&3 != 0 {
+		if symbol.Flags&2 != 0 {
 			localVersion = version
 		}
 		builder := ctxt.loader.MakeSymbolUpdater(ctxt.loader.LookupOrCreateCgoExport(symbol.Name, localVersion))
-		if builder.Type() != 0 && builder.Type() != sym.SXREF && builder.Type() != sym.SHOSTOBJ {
-			Errorf("%s: duplicate Wasm data symbol %s (%s)", name, symbol.Name, builder.Type())
-			return
+		defined := builder.Type() != 0 && builder.Type() != sym.SXREF && builder.Type() != sym.SHOSTOBJ
+		if defined {
+			if symbol.Flags&1 != 0 {
+				dataSymbols[symbol.Name] = builder.Sym()
+				continue
+			}
+			if !ctxt.WasmWeakDataSymbols[builder.Sym()] {
+				Errorf("%s: duplicate Wasm data symbol %s (%s)", name, symbol.Name, builder.Type())
+				return
+			}
 		}
 		builder.SetType(sym.SNOPTRDATA)
 		builder.SetValue(int64(symbol.Offset))
 		builder.SetSize(int64(symbol.Size))
 		builder.SetExternal(true)
-		segmentBuilders[symbol.Index].AddInteriorSym(builder.Sym())
+		if defined {
+			ctxt.loader.MoveInteriorSym(segmentBuilders[symbol.Index].Sym(), builder.Sym())
+		} else {
+			segmentBuilders[symbol.Index].AddInteriorSym(builder.Sym())
+		}
 		ctxt.loader.SetAttrReachable(builder.Sym(), true)
 		dataSymbols[symbol.Name] = builder.Sym()
-		if symbol.Flags&3 == 0 {
+		ctxt.WasmWeakDataSymbols[builder.Sym()] = symbol.Flags&1 != 0
+		if symbol.Flags&2 == 0 {
 			ctxt.WasmDataSymbols[symbol.Name] = builder.Sym()
 		}
 	}
@@ -165,7 +209,7 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			if ctxt.loader.SymType(target) == 0 {
 				ctxt.loader.MakeSymbolUpdater(target).SetType(sym.SXREF)
 			}
-			edge, _ := builder.AddRel(objabi.R_ADDR)
+			edge, _ := builder.AddRel(objabi.R_CONST)
 			edge.SetOff(int32(offset))
 			edge.SetSiz(4)
 			edge.SetSym(target)

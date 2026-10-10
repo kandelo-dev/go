@@ -1783,6 +1783,24 @@ func (l *Loader) AddInteriorSym(container Sym, interior Sym) {
 	l.outer[interior] = container
 }
 
+func (l *Loader) MoveInteriorSym(container Sym, interior Sym) {
+	oldContainer := l.OuterSym(interior)
+	if oldContainer == 0 {
+		panic("interior symbol has no container")
+	}
+	previous := oldContainer
+	for l.sub[previous] != interior {
+		previous = l.sub[previous]
+		if previous == 0 {
+			panic("interior symbol not found in container")
+		}
+	}
+	l.sub[previous] = l.sub[interior]
+	l.sub[interior] = 0
+	l.outer[interior] = 0
+	l.AddInteriorSym(container, interior)
+}
+
 // OuterSym gets the outer/container symbol.
 func (l *Loader) OuterSym(i Sym) Sym {
 	return l.outer[i]
