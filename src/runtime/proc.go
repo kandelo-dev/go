@@ -2323,6 +2323,9 @@ func allocm(pp *p, fn func(), id int64) *m {
 				// reachable off the system stack transitively from
 				// startm.
 				systemstack(func() {
+					if GOOS == "kandelo" && freem.cgoThread != nil {
+						stackfree(freem.cgoThread.stack)
+					}
 					stackfree(freem.g0.stack)
 					if valgrindenabled {
 						valgrindDeregisterStack(freem.g0.valgrindStackID)
@@ -2348,6 +2351,12 @@ func allocm(pp *p, fn func(), id int64) *m {
 		mp.g0 = malg(16384 * sys.StackGuardMultiplier)
 	}
 	mp.g0.m = mp
+	if iscgo && GOOS == "kandelo" {
+		mp.cgoThread = new(cgoThreadState)
+		systemstack(func() {
+			mp.cgoThread.stack = stackalloc(8 << 20)
+		})
+	}
 
 	if pp == gp.m.p.ptr() {
 		releasep()

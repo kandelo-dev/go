@@ -19,3 +19,9 @@ void x_cgo_kandelo_init(void *arg)
 		__builtin_trap();
 	x_crosscall2_ptr = crosscall2;
 }
+
+void x_cgo_kandelo_thread_init(void *thread_pointer)
+{
+	if (__init_tp(thread_pointer) < 0)
+		__builtin_trap();
+}

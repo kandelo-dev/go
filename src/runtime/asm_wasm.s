@@ -292,11 +292,12 @@ TEXT ·asmcgocall(SB), NOSPLIT, $0-0
 	MOVD $runtime·m0(SB), R3
 	Get R2
 	Get R3
-	I64Ne
+	I64Eq
 	If
-		UNDEF
+		MOVD $runtime·cgoCStack+(8<<20)(SB), R1
+	Else
+		MOVD m_cgoThread(R2), R1
 	End
-	MOVD $runtime·cgoCStack+(8<<20)(SB), R1
 	Get R1
 	I64Eqz
 	If

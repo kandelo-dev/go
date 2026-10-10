@@ -591,6 +591,7 @@ type m struct {
 
 	syscalltick uint32
 	freelink    *m // on sched.freem
+	cgoThread   *cgoThreadState
 	trace       mTraceState
 
 	// these are here because they are too large to be on the stack
@@ -625,6 +626,11 @@ type m struct {
 	// Up to 10 locks held by this m, maintained by the lock ranking code.
 	locksHeldLen int
 	locksHeld    [10]heldLockInfo
+}
+
+type cgoThreadState struct {
+	stack stack
+	tp    [64]uint32
 }
 
 const mRedZoneSize = (16 << 3) * asanenabledBit // redZoneSize(2048)

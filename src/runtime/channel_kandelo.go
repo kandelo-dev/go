@@ -190,6 +190,9 @@ func kandeloStopWasmLoop()
 //go:nosplit
 func kandeloThreadEntry() {
 	kandeloInitChannelBase()
+	if iscgo {
+		cgoKandeloThreadInit(unsafe.Pointer(&getg().m.cgoThread.tp[0]))
+	}
 	atomic.Store(&kandeloThreadHandoffAck, 1)
 	atomicNotify(&kandeloThreadHandoffAck, 1)
 	if getg().m.nextp == 0 && getg().m.mstartfn == nil {
@@ -233,13 +236,19 @@ func newosprocKandelo(mp *m) {
 	// shifts per build.
 	pcF := uint32(abi.FuncPCABI0(wasmThreadTramp) >> 16)
 	stackHi := uint64(g0.stack.hi)
+	cStackHi := g0.stack.hi
+	var cThreadPointer uint32
+	if iscgo {
+		cStackHi = mp.cgoThread.stack.hi
+		cThreadPointer = uint32(uintptr(unsafe.Pointer(&mp.cgoThread.tp[0])))
+	}
 
 	lock(&kandeloCloneLock)
 	kandeloThreadHandoffG = uint64(uintptr(unsafe.Pointer(g0)))
 	kandeloThreadHandoffSP = stackHi
 	atomic.Store(&kandeloThreadHandoffAck, 0)
 	flags := uint32(_CLONE_VM | _CLONE_FS | _CLONE_FILES | _CLONE_SIGHAND | _CLONE_THREAD | _CLONE_SYSVSEM)
-	ret := kernel_clone(pcF, uint32(stackHi), flags, 0, 0, 0, 0)
+	ret := kernel_clone(pcF, uint32(cStackHi), flags, 0, 0, cThreadPointer, 0)
 	if ret >= 0 {
 		for atomic.Load(&kandeloThreadHandoffAck) == 0 {
 			if atomicWait32(&kandeloThreadHandoffAck, 0, 15_000_000_000) == 2 {
