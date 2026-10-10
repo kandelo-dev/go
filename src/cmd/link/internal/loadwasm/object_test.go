@@ -326,3 +326,21 @@ func TestSDKRuntimeCgoElement(t *testing.T) {
 	}
 	t.Fatal("missing table-index relocation")
 }
+
+func TestSDKDataRelocations(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_DATA_RELOCATION_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_DATA_RELOCATION_OBJECT to an SDK object with DATA relocations")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.DataRelocations) != 1 || object.DataRelocations[0].Type != 5 || object.DataRelocations[0].Symbol.Name != "lock" {
+		t.Fatalf("unexpected DATA relocations: %+v", object.DataRelocations)
+	}
+}

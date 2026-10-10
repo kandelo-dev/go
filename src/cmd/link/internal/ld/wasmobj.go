@@ -30,10 +30,6 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			Errorf("%s: Wasm object section %d is not yet supported by internal linking", name, section.ID)
 			return
 		}
-		if section.Name == "reloc.DATA" {
-			Errorf("%s: Wasm DATA relocations are not yet supported by internal linking", name)
-			return
-		}
 		if section.Name == "reloc.ELEM" {
 			Errorf("%s: Wasm ELEM relocations are not yet supported by internal linking", name)
 			return
@@ -78,6 +74,33 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 	}
 	for _, builder := range segmentBuilders {
 		builder.SortSub()
+	}
+	for _, relocation := range object.DataRelocations {
+		var builder *loader.SymbolBuilder
+		var offset uint32
+		for index, segment := range object.DataSegments {
+			if relocation.Offset >= segment.Offset && uint64(relocation.Offset)+4 <= uint64(segment.Offset)+uint64(len(segment.Data)) {
+				builder = segmentBuilders[index]
+				offset = relocation.Offset - segment.Offset
+				break
+			}
+		}
+		if builder == nil {
+			Errorf("%s: invalid Wasm DATA relocation offset %d", name, relocation.Offset)
+			return
+		}
+		target := dataSymbols[relocation.Symbol.Name]
+		if target == 0 {
+			target = ctxt.loader.LookupOrCreateSym(relocation.Symbol.Name, 0)
+		}
+		if ctxt.loader.SymType(target) == 0 {
+			ctxt.loader.MakeSymbolUpdater(target).SetType(sym.SXREF)
+		}
+		edge, _ := builder.AddRel(objabi.R_ADDR)
+		edge.SetOff(int32(offset))
+		edge.SetSiz(4)
+		edge.SetAdd(int64(relocation.Addend))
+		edge.SetSym(target)
 	}
 	if ctxt.WasmHostFunctions == nil {
 		ctxt.WasmHostFunctions = make(map[loader.Sym]WasmHostFunction)
