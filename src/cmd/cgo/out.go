@@ -431,6 +431,12 @@ func dynimport(obj string) {
 		return
 	}
 
+	if os.Getenv("GOARCH") == "wasm" {
+		contents, err := os.ReadFile(obj)
+		if err == nil && bytes.HasPrefix(contents, []byte("\x00asm\x01\x00\x00\x00")) {
+			return
+		}
+	}
 	fatalf("cannot parse %s as ELF, Mach-O, PE or XCOFF", obj)
 }
 

@@ -26,12 +26,16 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 		return
 	}
 	for _, section := range object.Sections {
-		if section.ID == 6 || section.ID == 9 {
+		if section.ID == 6 {
 			Errorf("%s: Wasm object section %d is not yet supported by internal linking", name, section.ID)
 			return
 		}
 		if section.Name == "reloc.DATA" {
 			Errorf("%s: Wasm DATA relocations are not yet supported by internal linking", name)
+			return
+		}
+		if section.Name == "reloc.ELEM" {
+			Errorf("%s: Wasm ELEM relocations are not yet supported by internal linking", name)
 			return
 		}
 	}

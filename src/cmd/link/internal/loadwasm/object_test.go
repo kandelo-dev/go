@@ -86,11 +86,11 @@ func TestParseDataAndMemoryRelocation(t *testing.T) {
 	if len(object.CodeRelocations) != 1 || object.CodeRelocations[0].Type != 11 || object.CodeRelocations[0].Addend != -3 || object.CodeRelocations[0].Symbol.Name != "message" {
 		t.Fatalf("unexpected memory relocation: %+v", object.CodeRelocations)
 	}
-	patched, err := object.RelocateFunction(object.Functions[0], nil, nil, map[string]uint32{"message": 0x1234})
+	patched, err := object.RelocateFunction(object.Functions[0], nil, nil, map[string]uint32{"message": 0x1234}, nil, nil, nil)
 	if err != nil || !bytes.Equal(patched[2:7], []byte{0xb1, 0xa4, 0x80, 0x80, 0}) {
 		t.Fatalf("unexpected relocated memory address %x: %v", patched, err)
 	}
-	if _, err := object.RelocateFunction(object.Functions[0], nil, nil, nil); err == nil {
+	if _, err := object.RelocateFunction(object.Functions[0], nil, nil, nil, nil, nil, nil); err == nil {
 		t.Fatal("accepted memory relocation without a memory layout")
 	}
 }
@@ -122,14 +122,45 @@ func TestParse(t *testing.T) {
 	if len(object.Functions) != 1 || object.Functions[0].Name != "local" || object.Functions[0].Type.Params[0] != 0x7f {
 		t.Fatalf("unexpected functions: %+v", object.Functions)
 	}
-	patched, err := object.RelocateFunction(object.Functions[0], map[string]uint32{"c_func": 42}, nil, nil)
+	patched, err := object.RelocateFunction(object.Functions[0], map[string]uint32{"c_func": 42}, nil, nil, nil, nil, nil)
 	if err != nil || patched[2] != 42 || object.Functions[0].Body[2] != 0 {
 		t.Fatalf("unexpected relocated body %x: %v", patched, err)
 	}
 }
 
+func TestTypeAndTableRelocations(t *testing.T) {
+	for _, kind := range []byte{6, 20} {
+		object, err := Parse(testObjectWithRelocation(kind))
+		if err != nil {
+			t.Fatal(err)
+		}
+		patched, err := object.RelocateFunction(object.Functions[0], nil, nil, nil, map[string]uint32{"c_func": 42}, nil, map[uint32]uint32{1: 42})
+		if err != nil || patched[2] != 42 {
+			t.Fatalf("relocation kind %d = %x: %v", kind, patched, err)
+		}
+	}
+}
+
+func TestElementSegments(t *testing.T) {
+	functions := []Function{{Index: 1, Name: "local"}}
+	segments, err := elementSegments([]byte{1, 0, 0x41, 1, 0x0b, 1, 1}, 1, functions)
+	if err != nil || len(segments) != 1 || segments[0].Offset != 1 || len(segments[0].Functions) != 1 || segments[0].Functions[0] != 1 {
+		t.Fatalf("element segments = %+v: %v", segments, err)
+	}
+	for _, data := range [][]byte{
+		{1, 1, 0x41, 1, 0x0b, 1, 1},
+		{1, 0, 0x41, 1, 0x0b, 1, 0},
+		{1, 0, 0x41, 1, 0x0b, 1, 2},
+		{1, 0, 0x41, 1, 0x0b, 1},
+	} {
+		if _, err := elementSegments(data, 1, functions); err == nil {
+			t.Fatalf("accepted invalid element segment %x", data)
+		}
+	}
+}
+
 func TestParseRejectsInvalidObject(t *testing.T) {
-	for _, data := range [][]byte{nil, []byte("\x00asm\x01\x00\x00\x00\x00\xff"), testObject()[:9], testObjectWithRelocation(6)} {
+	for _, data := range [][]byte{nil, []byte("\x00asm\x01\x00\x00\x00\x00\xff"), testObject()[:9], testObjectWithRelocation(21)} {
 		if _, err := Parse(data); err == nil {
 			t.Fatalf("accepted invalid object %x", data)
 		}
@@ -180,7 +211,7 @@ func TestSDKCgoCallRelocation(t *testing.T) {
 		t.Fatalf("unexpected C-call functions: %+v", object.Functions)
 	}
 	function := object.Functions[0]
-	patched, err := object.RelocateFunction(function, map[string]uint32{"_cgo_topofstack": 42}, nil, nil)
+	patched, err := object.RelocateFunction(function, map[string]uint32{"_cgo_topofstack": 42}, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,4 +252,77 @@ func TestSDKRuntimeCgoData(t *testing.T) {
 	if !found {
 		t.Fatalf("missing runtime/cgo memory relocation: %+v", object.CodeRelocations)
 	}
+}
+
+func TestSDKRuntimeCgoContext(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_RUNTIME_CGO_CONTEXT_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_RUNTIME_CGO_CONTEXT_OBJECT to a runtime/cgo context object")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundType := false
+	foundTable := false
+	for _, relocation := range object.CodeRelocations {
+		foundType = foundType || relocation.Type == 6
+		foundTable = foundTable || relocation.Type == 20 && relocation.Symbol.Name == "__indirect_function_table"
+	}
+	if !foundType || !foundTable {
+		t.Fatalf("missing type or table relocation: %+v", object.CodeRelocations)
+	}
+}
+
+func TestSDKRuntimeCgoElement(t *testing.T) {
+	path := os.Getenv("KANDELO_WASM_RUNTIME_CGO_ELEMENT_OBJECT")
+	if path == "" {
+		t.Skip("set KANDELO_WASM_RUNTIME_CGO_ELEMENT_OBJECT to a runtime/cgo object with a table element")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(object.ElementSegments) != 1 || len(object.ElementSegments[0].Functions) != 1 {
+		t.Fatalf("unexpected element segments: %+v", object.ElementSegments)
+	}
+	functionIndex := object.ElementSegments[0].Functions[0]
+	found := false
+	for _, function := range object.Functions {
+		found = found || function.Index == functionIndex && function.Name == "pthread_key_destructor"
+	}
+	if !found {
+		t.Fatalf("missing table function %d", functionIndex)
+	}
+	for _, relocation := range object.CodeRelocations {
+		if relocation.Type != 12 || relocation.Symbol.Name != "pthread_key_destructor" {
+			continue
+		}
+		for _, function := range object.Functions {
+			if relocation.Offset < function.BodyOffset || uint64(relocation.Offset) >= uint64(function.BodyOffset)+uint64(len(function.Body)) {
+				continue
+			}
+			isolated := *object
+			isolated.CodeRelocations = []Relocation{relocation}
+			patched, err := isolated.RelocateFunction(function, nil, nil, nil, nil, map[string]uint32{"pthread_key_destructor": 4096}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := relocation.Offset - function.BodyOffset
+			value := reader{data: patched[offset:]}
+			if index, err := value.signed(); err != nil || index != 4096 {
+				t.Fatalf("table slot = %d: %v", index, err)
+			}
+			return
+		}
+	}
+	t.Fatal("missing table-index relocation")
 }

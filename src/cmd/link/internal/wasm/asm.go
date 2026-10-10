@@ -69,6 +69,7 @@ func readWasmImport(ldr *loader.Loader, s loader.Sym) obj.WasmImport {
 }
 
 var wasmFuncTypes = map[string]*wasmFuncType{
+	"_cgo_topofstack":        {Results: []byte{I32}},
 	"_rt0_wasm_js":            {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1":        {Params: []byte{}},                                         //
 	"_rt0_wasm_wasip1_lib":    {Params: []byte{}},                                         //
@@ -190,15 +191,27 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	fns := make([]*wasmFunc, len(ctxt.Textp))
 	hostFunctionIndices := make(map[string]uint32)
 	hasMemoryBase := false
+	hasTableBase := false
+	hasStackPointer := false
 	for _, fn := range ctxt.Textp {
+		if ldr.SymName(fn) == "_cgo_topofstack" {
+			hostFunctionIndices["_cgo_topofstack"] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
+		}
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
 			if _, exists := hostFunctionIndices[host.Function.Name]; exists {
 				ld.Exitf("duplicate Wasm host function name %s", host.Function.Name)
 			}
 			hostFunctionIndices[host.Function.Name] = uint32(len(hostImports)) + uint32(ldr.SymValue(fn)>>16) - funcValueOffset
 			for _, relocation := range host.Object.CodeRelocations {
-				if relocation.Type == 7 && relocation.Symbol.Name == "__memory_base" {
-					hasMemoryBase = true
+				if relocation.Type == 7 {
+					switch relocation.Symbol.Name {
+					case "__memory_base":
+						hasMemoryBase = true
+					case "__table_base":
+						hasTableBase = true
+					case "__stack_pointer":
+						hasStackPointer = true
+					}
 				}
 			}
 		}
@@ -209,6 +222,17 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			if hasMemoryBase {
 				globalIndices["__memory_base"] = 10
 			}
+			nextGlobal := uint32(10)
+			if hasMemoryBase {
+				nextGlobal++
+			}
+			if hasTableBase {
+				globalIndices["__table_base"] = nextGlobal
+				nextGlobal++
+			}
+			if hasStackPointer {
+				globalIndices["__stack_pointer"] = nextGlobal
+			}
 			memoryAddresses := make(map[string]uint32)
 			for name, symbol := range host.DataSymbols {
 				address := ldr.SymValue(symbol)
@@ -217,7 +241,15 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 				}
 				memoryAddresses[name] = uint32(address)
 			}
-			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses)
+			typeIndices := make(map[uint32]uint32)
+			for index, signature := range host.Object.Types {
+				typeIndices[uint32(index)] = lookupType(&wasmFuncType{Params: signature.Params, Results: signature.Results}, &types)
+			}
+			tableSlots := make(map[string]uint32, len(hostFunctionIndices))
+			for name, index := range hostFunctionIndices {
+				tableSlots[name] = funcValueOffset + index - uint32(len(hostImports))
+			}
+			body, err := host.Object.RelocateFunction(host.Function, hostFunctionIndices, globalIndices, memoryAddresses, map[string]uint32{"__indirect_function_table": 0}, tableSlots, typeIndices)
 			if err != nil {
 				ld.Exitf("Wasm host function %s: %v", host.Function.Name, err)
 			}
@@ -360,8 +392,8 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// memory section.
 		writeMemorySec(ctxt, ldr)
 	}
-	writeGlobalSec(ctxt, ldr, hasMemoryBase)
-	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx)
+	writeGlobalSec(ctxt, ldr, hasMemoryBase, hasTableBase, hasStackPointer)
+	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx, hasMemoryBase, hasTableBase, hasStackPointer)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
@@ -526,7 +558,7 @@ func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
 }
 
 // writeGlobalSec writes the section that declares global variables.
-func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase bool) {
+func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBase, hasStackPointer bool) {
 	sizeOffset := writeSecHeader(ctxt, sectionGlobal)
 
 	globalRegs := []byte{
@@ -557,6 +589,12 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase bool) {
 		// and __heap_base (static-data end, index 9). See below.
 		numGlobals += 2
 		if hasMemoryBase {
+			numGlobals++
+		}
+		if hasTableBase {
+			numGlobals++
+		}
+		if hasStackPointer {
 			numGlobals++
 		}
 	}
@@ -612,6 +650,18 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase bool) {
 			writeI32Const(ctxt.Out, 0)
 			ctxt.Out.WriteByte(0x0b)
 		}
+		if hasTableBase {
+			ctxt.Out.WriteByte(I32)
+			ctxt.Out.WriteByte(0x00)
+			writeI32Const(ctxt.Out, 0)
+			ctxt.Out.WriteByte(0x0b)
+		}
+		if hasStackPointer {
+			ctxt.Out.WriteByte(I32)
+			ctxt.Out.WriteByte(0x01)
+			writeI32Const(ctxt.Out, 0)
+			ctxt.Out.WriteByte(0x0b)
+		}
 	}
 
 	writeSecSize(ctxt, sizeOffset)
@@ -620,7 +670,7 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase bool) {
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
 // The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32) {
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32, hasMemoryBase, hasTableBase, hasStackPointer bool) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
@@ -663,7 +713,11 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		// __wasm_posix_thread_slots(1) + preallocation marker(1) +
 		// __tls_base(1) + __heap_base(1) +
 		// __indirect_function_table(1).
-		writeUleb128(ctxt.Out, uint64(7+len(ldr.WasmExports))) // number of exports
+		exportCount := 7 + len(ldr.WasmExports)
+		if hasStackPointer {
+			exportCount++
+		}
+		writeUleb128(ctxt.Out, uint64(exportCount)) // number of exports
 		var entry, entryExpName string
 		switch ctxt.BuildMode {
 		case ld.BuildModeExe:
@@ -719,6 +773,18 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		writeName(ctxt.Out, "__indirect_function_table") // thread-entry dispatch
 		ctxt.Out.WriteByte(0x01)                         // table export
 		writeUleb128(ctxt.Out, uint64(kandeloIndirectFuncTableIdx))
+		if hasStackPointer {
+			stackPointerIndex := uint64(10)
+			if hasMemoryBase {
+				stackPointerIndex++
+			}
+			if hasTableBase {
+				stackPointerIndex++
+			}
+			writeName(ctxt.Out, "__stack_pointer")
+			ctxt.Out.WriteByte(0x03)
+			writeUleb128(ctxt.Out, stackPointerIndex)
+		}
 	case "js":
 		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
 		for _, name := range []string{"run", "resume", "getsp"} {

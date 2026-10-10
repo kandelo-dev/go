@@ -290,6 +290,16 @@ TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
 TEXT ·asmcgocall(SB), NOSPLIT, $0-0
 	UNDEF
 
+#ifdef GOOS_kandelo
+TEXT _cgo_topofstack(SB), NOSPLIT|NOFRAME, $0
+	MOVD g_m(g), R1
+	MOVD m_curg(R1), R2
+	MOVD g_stack+stack_hi(R2), R3
+	Get R3
+	I32WrapI64
+	Return
+#endif
+
 #define DISPATCH(NAME, MAXSIZE) \
 	Get R0; \
 	I64Const $MAXSIZE; \
