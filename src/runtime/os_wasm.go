@@ -12,13 +12,7 @@ import (
 func osinit() {
 	// https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
 	physPageSize = 64 * 1024
-	initBloc()
-	blocMax = uintptr(currentMemory()) * physPageSize // record the initial linear memory size
-	// On GOOS=kandelo the host reserves the per-process syscall channel region
-	// inside this initial linear memory, so the heap must start above it rather
-	// than treating [firstmoduledata.end, blocMax) as free. No-op on other wasm
-	// GOOSes. See kandeloStartHeapAboveChannel.
-	kandeloStartHeapAboveChannel()
+	initWasmMemory()
 	// Capture the main M's syscall-channel base from the location the host
 	// wrote it (the kandeloChannelBase word at the __tls_base address) into
 	// this M's own mOS.channelBase, so doSyscall reads a per-M base. No-op on
@@ -56,8 +50,12 @@ type mOS struct {
 	// than a single package word. The main M captures it in osinit; a future
 	// thread M captures it in its entry trampoline (see channel_kandelo.go,
 	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
-	channelBase   uintptr
-	clockTimespec [2]int64
+	channelBase    uintptr
+	cgoChannelBase uint32
+	callbackCurgSP uintptr
+	callbackCurgPC uintptr
+	callbackG0SP   uintptr
+	clockTimespec  [2]int64
 }
 
 func osyield()

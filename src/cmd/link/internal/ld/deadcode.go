@@ -123,6 +123,11 @@ func (d *deadcodePass) init() {
 		}
 		wasmRoots[s] = true
 	}
+	if d.ctxt.HeadType == objabi.Hkandelo {
+		if bootstrap := d.ldr.Lookup("wasm_export_cgo_thread_bootstrap", 0); bootstrap != 0 && d.ldr.SymType(bootstrap) == sym.STEXT {
+			wasmRoots[bootstrap] = true
+		}
+	}
 	for _, relocation := range d.ctxt.WasmDataTableRelocs {
 		if d.ldr.SymType(relocation.Target) == sym.STEXT {
 			wasmRoots[relocation.Target] = true

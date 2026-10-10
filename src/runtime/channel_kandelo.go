@@ -102,22 +102,24 @@ func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret in
 	return ret, errno
 }
 
-// kandeloInitChannelBase copies this M's syscall-channel base out of the
-// transient handoff word (kandeloChannelBase, at the __tls_base address the
-// host wrote) and into the M's own mOS.channelBase. Each M is a distinct
-// WebAssembly.Instance over the shared linear memory, so kandeloChannelBase is
-// a single shared word the host overwrites for each instance just before it
-// enters; the M must read it immediately and keep its own copy. getg().m is a
-// per-instance value (g is a per-instance wasm global), so this stores into
-// the correct M even though every m struct lives in the shared memory.
+// kandeloInitChannelBase copies this M's syscall-channel base into its own
+// mOS.channelBase. Non-cgo builds use the serialized shared handoff word.
+// Cgo builds instead read C's per-instance mutable __channel_base global:
+// a C-created pthread can start concurrently with a Go M and overwrite the
+// shared handoff word before either thread reads it.
 //
-// The main M calls this from osinit. A future thread M will call it from its
-// entry trampoline (wasm_pthread_start) before performing any syscall.
-// The parent holds kandeloCloneLock until this read and the handoff ack.
+// The main M calls this from osinit. A thread M calls it from its entry
+// trampoline before performing any syscall. Foreign C threads call it after
+// attaching an extra Go M. The parent holds kandeloCloneLock across the
+// non-cgo shared-word handoff.
 //
 //go:nosplit
 func kandeloInitChannelBase() {
-	getg().m.channelBase = uintptr(kandeloChannelBase)
+	if iscgo {
+		getg().m.channelBase = uintptr(kandeloCgoChannelBase())
+	} else {
+		getg().m.channelBase = uintptr(kandeloChannelBase)
+	}
 }
 
 // Second-M spawn (kernel_clone) mechanism
@@ -305,42 +307,4 @@ func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno in
 	// Release the channel back to Idle for the next syscall.
 	atomicStore32(statusPtr, chIdle)
 	return ret, errno
-}
-
-// kandeloStartHeapAboveChannel moves the runtime's break to the top of the
-// initial linear memory the Kandelo host committed, so the Go heap grows
-// strictly above the per-process syscall channel region.
-//
-// The problem it solves: Go's wasm allocator (mem_sbrk.go) treats
-// [firstmoduledata.end, currentMemory) as heap it may hand out directly, and
-// grows past currentMemory with growMemory. The host, however, reserves the
-// syscall channel region inside that initial linear memory (just above the
-// guest's __heap_base). Without this adjustment the runtime would allocate
-// straight across the channel pages and silently corrupt the syscall channel
-// once the live heap grew past them.
-//
-// osinit records currentMemory in blocMax before calling this. Because the host
-// guarantees the entire per-process control region -- the channel included --
-// lies within that initial linear memory, starting the break at blocMax leaves
-// every channel page below the heap. Subsequent heap pages come from sbrk /
-// growMemory strictly above it. The only memory forfeited is
-// [firstmoduledata.end, channel_top): the module's own ~1 MiB linker init
-// headroom plus the channel's few pages, not a large fixed reservation.
-//
-// The guest deliberately does not model the host's internal control-region
-// layout (scratch page, per-thread slots): it only relies on the published
-// invariant that everything the host reserved is within the initial memory.
-//
-// kandeloChannelBase is nonzero only when a Kandelo host provisioned the
-// channel; guarding on it keeps this a no-op if the runtime ever links without
-// that host contract in place.
-//
-//go:nosplit
-func kandeloStartHeapAboveChannel() {
-	if kandeloChannelBase == 0 {
-		return
-	}
-	if bloc < blocMax {
-		bloc = blocMax
-	}
 }

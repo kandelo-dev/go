@@ -237,6 +237,14 @@ func callbackUpdateSystemStack(mp *m, sp uintptr, signal bool) {
 		// with the exact ones.
 		return
 	}
+	if lo, hi := kandeloCgoStackBounds(sp); hi != 0 {
+		g0.stack.lo = lo
+		g0.stack.hi = hi
+		g0.stackguard0 = lo + stackGuard
+		g0.stackguard1 = g0.stackguard0
+		mp.g0StackAccurate = true
+		return
+	}
 
 	inBound := sp > g0.stack.lo && sp <= g0.stack.hi
 	if inBound && mp.g0StackAccurate {
@@ -269,7 +277,7 @@ func callbackUpdateSystemStack(mp *m, sp uintptr, signal bool) {
 	g0.stack.hi = sp + 1024
 	g0.stack.lo = sp - 32*1024
 	mp.g0StackAccurate = false
-	if !signal && _cgo_getstackbound != nil {
+	if !signal && GOOS != "kandelo" && _cgo_getstackbound != nil {
 		// Don't adjust if called from the signal handler.
 		// We are on the signal stack, not the pthread stack.
 		// (We could get the stack bounds from sigaltstack, but

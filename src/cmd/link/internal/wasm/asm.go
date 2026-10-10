@@ -76,34 +76,35 @@ func readWasmImport(ldr *loader.Loader, s loader.Sym) obj.WasmImport {
 }
 
 var wasmFuncTypes = map[string]*wasmFuncType{
-	"_rt0_wasm_js":            {Params: []byte{}},                                         //
-	"_rt0_wasm_wasip1":        {Params: []byte{}},                                         //
-	"_rt0_wasm_wasip1_lib":    {Params: []byte{}},                                         //
-	"_rt0_wasm_kandelo":       {Params: []byte{}},                                         //
-	"_rt0_wasm_kandelo_lib":   {Params: []byte{}},                                         //
-	"wasm_export__start":      {},                                                         //
-	"wasm_export_run":         {Params: []byte{I32, I32}},                                 // argc, argv
-	"wasm_export_resume":      {Params: []byte{}},                                         //
-	"wasm_export_getsp":       {Results: []byte{I32}},                                     // sp
-	"wasm_pc_f_loop":          {Params: []byte{}},                                         //
-	"wasm_pc_f_loop_export":   {Params: []byte{I32}},                                      // pc_f
-	"runtime.wasmDiv":         {Params: []byte{I64, I64}, Results: []byte{I64}},           // x, y -> x/y
-	"runtime.wasmTruncS":      {Params: []byte{F64}, Results: []byte{I64}},                // x -> int(x)
-	"runtime.wasmTruncU":      {Params: []byte{F64}, Results: []byte{I64}},                // x -> uint(x)
-	"gcWriteBarrier":          {Params: []byte{I64}, Results: []byte{I64}},                // #bytes -> bufptr
-	"runtime.gcWriteBarrier1": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier2": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier3": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier4": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier5": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier6": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier7": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.gcWriteBarrier8": {Results: []byte{I64}},                                     // -> bufptr
-	"runtime.notInitialized":  {},                                                         //
-	"cmpbody":                 {Params: []byte{I64, I64, I64, I64}, Results: []byte{I64}}, // a, alen, b, blen -> -1/0/1
-	"memeqbody":               {Params: []byte{I64, I64, I64}, Results: []byte{I64}},      // a, b, len -> 0/1
-	"memcmp":                  {Params: []byte{I32, I32, I32}, Results: []byte{I32}},      // a, b, len -> <0/0/>0
-	"memchr":                  {Params: []byte{I32, I32, I32}, Results: []byte{I32}},      // s, c, len -> index
+	"_rt0_wasm_js":                     {Params: []byte{}},         //
+	"_rt0_wasm_wasip1":                 {Params: []byte{}},         //
+	"_rt0_wasm_wasip1_lib":             {Params: []byte{}},         //
+	"_rt0_wasm_kandelo":                {Params: []byte{}},         //
+	"_rt0_wasm_kandelo_lib":            {Params: []byte{}},         //
+	"wasm_export__start":               {},                         //
+	"wasm_export_run":                  {Params: []byte{I32, I32}}, // argc, argv
+	"wasm_export_resume":               {Params: []byte{}},         //
+	"wasm_export_getsp":                {Results: []byte{I32}},     // sp
+	"wasm_export_cgo_thread_bootstrap": {Params: []byte{I32}},
+	"wasm_pc_f_loop":                   {Params: []byte{}},                                         //
+	"wasm_pc_f_loop_export":            {Params: []byte{I32}},                                      // pc_f
+	"runtime.wasmDiv":                  {Params: []byte{I64, I64}, Results: []byte{I64}},           // x, y -> x/y
+	"runtime.wasmTruncS":               {Params: []byte{F64}, Results: []byte{I64}},                // x -> int(x)
+	"runtime.wasmTruncU":               {Params: []byte{F64}, Results: []byte{I64}},                // x -> uint(x)
+	"gcWriteBarrier":                   {Params: []byte{I64}, Results: []byte{I64}},                // #bytes -> bufptr
+	"runtime.gcWriteBarrier1":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier2":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier3":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier4":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier5":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier6":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier7":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.gcWriteBarrier8":          {Results: []byte{I64}},                                     // -> bufptr
+	"runtime.notInitialized":           {},                                                         //
+	"cmpbody":                          {Params: []byte{I64, I64, I64, I64}, Results: []byte{I64}}, // a, alen, b, blen -> -1/0/1
+	"memeqbody":                        {Params: []byte{I64, I64, I64}, Results: []byte{I64}},      // a, b, len -> 0/1
+	"memcmp":                           {Params: []byte{I32, I32, I32}, Results: []byte{I32}},      // a, b, len -> <0/0/>0
+	"memchr":                           {Params: []byte{I32, I32, I32}, Results: []byte{I32}},      // s, c, len -> index
 }
 
 func assignAddress(ldr *loader.Loader, sect *sym.Section, n int, s loader.Sym, va uint64, isTramp bool) (*sym.Section, int, uint64) {
@@ -168,6 +169,22 @@ func asmb(ctxt *ld.Link, ldr *loader.Loader) {
 		}
 		if !found {
 			ld.Exitf("Wasm function pointer relocation outside static data for %s", ldr.SymName(relocation.Target))
+		}
+	}
+	if slots := ldr.Lookup("runtime.kandeloCgoBootstrapSlotCount", 0); slots != 0 && ldr.AttrReachable(slots) {
+		address := ldr.SymValue(slots)
+		found := false
+		for _, section := range dataSects {
+			start := int64(section.sect.Vaddr)
+			if address < start || address+4 > start+int64(len(section.data)) {
+				continue
+			}
+			binary.LittleEndian.PutUint32(section.data[address-start:], uint32(*kandeloThreadSlots))
+			found = true
+			break
+		}
+		if !found {
+			ld.Exitf("cgo bootstrap thread slot count outside static data")
 		}
 	}
 }
@@ -947,6 +964,14 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		// __tls_base(1) + __heap_base(1) +
 		// __indirect_function_table(1).
 		exportCount := 7 + len(ldr.WasmExports)
+		bootstrap := ldr.Lookup("wasm_export_cgo_thread_bootstrap", 0)
+		if bootstrap != 0 && ldr.AttrReachable(bootstrap) {
+			exportCount++
+		}
+		threadInit := ldr.Lookup("__wasm_thread_init", 0)
+		if threadInit != 0 && ldr.AttrReachable(threadInit) {
+			exportCount++
+		}
 		if hasStackPointer {
 			exportCount++
 		}
@@ -982,6 +1007,18 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 			writeName(ctxt.Out, ldr.SymName(s))
 			ctxt.Out.WriteByte(0x00)            // func export
 			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
+		}
+		if bootstrap != 0 && ldr.AttrReachable(bootstrap) {
+			idx := uint32(lenHostImports) + uint32(ldr.SymValue(bootstrap)>>16) - funcValueOffset
+			writeName(ctxt.Out, "__kandelo_cgo_thread_bootstrap")
+			ctxt.Out.WriteByte(0x00)
+			writeUleb128(ctxt.Out, uint64(idx))
+		}
+		if threadInit != 0 && ldr.AttrReachable(threadInit) {
+			idx := uint32(lenHostImports) + uint32(ldr.SymValue(threadInit)>>16) - funcValueOffset
+			writeName(ctxt.Out, "__wasm_thread_init")
+			ctxt.Out.WriteByte(0x00)
+			writeUleb128(ctxt.Out, uint64(idx))
 		}
 		writeName(ctxt.Out, "__abi_version")               // Kandelo ABI marker
 		ctxt.Out.WriteByte(0x00)                           // func export

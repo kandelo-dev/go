@@ -468,6 +468,12 @@ TEXT runtime·goexit(SB), NOSPLIT|TOPFRAME, $0-0
 TEXT runtime·cgocallback(SB), NOSPLIT, $0-24
 	UNDEF
 
+#ifdef GOOS_kandelo
+TEXT runtime·setg(SB), NOSPLIT, $0-8
+	MOVD gg+0(FP), g
+	RET
+#endif
+
 // gcWriteBarrier informs the GC about heap pointer writes.
 //
 // gcWriteBarrier does NOT follow the Go ABI. It accepts the

@@ -1062,33 +1062,34 @@ func regAddr(reg int16) obj.Addr {
 // Most of the Go functions has a single parameter (PC_B) in
 // Wasm ABI. This is a list of exceptions.
 var notUsePC_B = map[string]bool{
-	"_rt0_wasm_js":            true,
-	"_rt0_wasm_wasip1":        true,
-	"_rt0_wasm_wasip1_lib":    true,
-	"_rt0_wasm_kandelo":       true,
-	"_rt0_wasm_kandelo_lib":   true,
-	"wasm_export_run":         true,
-	"wasm_export_resume":      true,
-	"wasm_export_getsp":       true,
-	"wasm_pc_f_loop":          true,
-	"wasm_pc_f_loop_export":   true,
-	"gcWriteBarrier":          true,
-	"runtime.gcWriteBarrier1": true,
-	"runtime.gcWriteBarrier2": true,
-	"runtime.gcWriteBarrier3": true,
-	"runtime.gcWriteBarrier4": true,
-	"runtime.gcWriteBarrier5": true,
-	"runtime.gcWriteBarrier6": true,
-	"runtime.gcWriteBarrier7": true,
-	"runtime.gcWriteBarrier8": true,
-	"runtime.notInitialized":  true,
-	"runtime.wasmDiv":         true,
-	"runtime.wasmTruncS":      true,
-	"runtime.wasmTruncU":      true,
-	"cmpbody":                 true,
-	"memeqbody":               true,
-	"memcmp":                  true,
-	"memchr":                  true,
+	"_rt0_wasm_js":                     true,
+	"_rt0_wasm_wasip1":                 true,
+	"_rt0_wasm_wasip1_lib":             true,
+	"_rt0_wasm_kandelo":                true,
+	"_rt0_wasm_kandelo_lib":            true,
+	"wasm_export_run":                  true,
+	"wasm_export_resume":               true,
+	"wasm_export_getsp":                true,
+	"wasm_export_cgo_thread_bootstrap": true,
+	"wasm_pc_f_loop":                   true,
+	"wasm_pc_f_loop_export":            true,
+	"gcWriteBarrier":                   true,
+	"runtime.gcWriteBarrier1":          true,
+	"runtime.gcWriteBarrier2":          true,
+	"runtime.gcWriteBarrier3":          true,
+	"runtime.gcWriteBarrier4":          true,
+	"runtime.gcWriteBarrier5":          true,
+	"runtime.gcWriteBarrier6":          true,
+	"runtime.gcWriteBarrier7":          true,
+	"runtime.gcWriteBarrier8":          true,
+	"runtime.notInitialized":           true,
+	"runtime.wasmDiv":                  true,
+	"runtime.wasmTruncS":               true,
+	"runtime.wasmTruncU":               true,
+	"cmpbody":                          true,
+	"memeqbody":                        true,
+	"memcmp":                           true,
+	"memchr":                           true,
 }
 
 func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
@@ -1131,6 +1132,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		useAssemblyRegMap()
 	case "wasm_pc_f_loop_export":
 		varDecls = []*varDecl{{count: 2, typ: i32}}
+		useAssemblyRegMap()
+	case "wasm_export_cgo_thread_bootstrap":
+		varDecls = []*varDecl{{count: 3, typ: i64}}
 		useAssemblyRegMap()
 	case "memchr", "memcmp":
 		varDecls = []*varDecl{{count: 2, typ: i32}}

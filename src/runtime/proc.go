@@ -2281,7 +2281,7 @@ type cgothreadstart struct {
 // isn't because it borrows pp.
 //
 //go:yeswritebarrierrec
-func allocm(pp *p, fn func(), id int64) *m {
+func allocm(pp *p, fn func(), id int64, extra bool) *m {
 	allocmLock.rlock()
 
 	// The caller owns pp, but we may borrow (i.e., acquirep) it. We must
@@ -2351,7 +2351,7 @@ func allocm(pp *p, fn func(), id int64) *m {
 		mp.g0 = malg(16384 * sys.StackGuardMultiplier)
 	}
 	mp.g0.m = mp
-	if iscgo && GOOS == "kandelo" {
+	if iscgo && GOOS == "kandelo" && !extra {
 		mp.cgoThread = new(cgoThreadState)
 		systemstack(func() {
 			mp.cgoThread.stack = stackalloc(8 << 20)
@@ -2522,7 +2522,7 @@ func oneNewExtraM() {
 	// The sched.pc will never be returned to, but setting it to
 	// goexit makes clear to the traceback routines where
 	// the goroutine stack ends.
-	mp := allocm(nil, nil, -1)
+	mp := allocm(nil, nil, -1, true)
 	gp := malg(4096)
 	gp.sched.pc = abi.FuncPCABI0(goexit) + sys.PCQuantum
 	gp.sched.sp = gp.stack.hi
@@ -2881,7 +2881,7 @@ func newm(fn func(), pp *p, id int64) {
 	// start.
 	acquirem()
 
-	mp := allocm(pp, fn, id)
+	mp := allocm(pp, fn, id, false)
 	mp.nextp.set(pp)
 	mp.sigmask = initSigmask
 	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" && GOOS != "kandelo" {

@@ -5,12 +5,41 @@ package runtime
 import "unsafe"
 
 var cgoCStack [8 << 20]byte
+var kandeloCgoBootstrapStackBase uintptr
+var kandeloCgoBootstrapSlotCount uint32 = 1
+
+const kandeloCgoBootstrapStackSize = 32 << 10
+
+func kandeloCgoReadChannelBase(base *uint32)
+
+//go:nosplit
+func kandeloCgoChannelBase() uint32 {
+	base := &getg().m.cgoChannelBase
+	kandeloCgoReadChannelBase(base)
+	return *base
+}
+
+//go:nosplit
+func kandeloCgoStackBounds(sp uintptr) (uintptr, uintptr) {
+	base := kandeloCgoBootstrapStackBase
+	end := base + uintptr(kandeloCgoBootstrapSlotCount)*kandeloCgoBootstrapStackSize
+	if sp < base || sp >= end {
+		return 0, 0
+	}
+	index := (sp - base) / kandeloCgoBootstrapStackSize
+	lo := base + index*kandeloCgoBootstrapStackSize
+	return lo, lo + kandeloCgoBootstrapStackSize
+}
 
 //go:linkname kandeloCgoStartupArgs
 var kandeloCgoStartupArgs [2]uint32
 
 //go:linkname kandeloCgoPrepareEnv
 func kandeloCgoPrepareEnv() {
+	if kandeloCgoBootstrapSlotCount == 0 || kandeloCgoBootstrapSlotCount > 1024 {
+		throw("invalid cgo bootstrap stack count")
+	}
+	kandeloCgoBootstrapStackBase = uintptr(persistentalloc(uintptr(kandeloCgoBootstrapSlotCount)*kandeloCgoBootstrapStackSize, 16, &memstats.other_sys))
 	if len(envs) > 4096 {
 		throw("too many C environment entries")
 	}
