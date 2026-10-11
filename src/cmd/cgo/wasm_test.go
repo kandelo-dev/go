@@ -2,13 +2,46 @@ package main
 
 import (
 	"bytes"
+	"debug/dwarf"
 	"encoding/binary"
 	"go/ast"
+	"go/format"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestKandeloWasmCgoPointerStructFields(t *testing.T) {
+	previousOS, previousArch := goos, goarch
+	goos, goarch = "kandelo", "wasm"
+	t.Cleanup(func() { goos, goarch = previousOS, previousArch })
+	integer := &dwarf.IntType{BasicType: dwarf.BasicType{CommonType: dwarf.CommonType{Name: "int", ByteSize: 4}}}
+	pointer := &dwarf.PtrType{CommonType: dwarf.CommonType{ByteSize: 4}, Type: integer}
+	array := &dwarf.ArrayType{Type: pointer, Count: 2}
+	converter := new(typeConv)
+	converter.Init(4, 8)
+	for _, test := range []struct {
+		name  string
+		dtype dwarf.Type
+		want  string
+	}{
+		{"pointer", pointer, "uint32"},
+		{"pointer array", array, "[2]uint32"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mapped := converter.kandeloStructFieldType(test.dtype, converter.Type(test.dtype, token.NoPos).Go, token.NoPos)
+			var output bytes.Buffer
+			if err := format.Node(&output, token.NewFileSet(), mapped); err != nil {
+				t.Fatal(err)
+			}
+			if got := output.String(); got != test.want {
+				t.Fatalf("field type = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
 
 func TestKandeloWasmCgoFrameLayout(t *testing.T) {
 	previousOS, previousArch := goos, goarch

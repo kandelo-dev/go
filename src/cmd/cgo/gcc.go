@@ -3051,6 +3051,28 @@ func (c *typeConv) pad(fld []*ast.Field, sizes []int64, size int64) ([]*ast.Fiel
 }
 
 // Struct conversion: return Go and (gc) C syntax for type.
+func (c *typeConv) kandeloStructFieldType(dtype dwarf.Type, goType ast.Expr, pos token.Pos) ast.Expr {
+	if goos != "kandelo" || goarch != "wasm" || c.ptrSize != 4 {
+		return goType
+	}
+	switch dt := base(dtype).(type) {
+	case *dwarf.PtrType:
+		return c.uint32
+	case *dwarf.ArrayType:
+		if dt.StrideBitSize == 0 {
+			count := dt.Count
+			if count < 0 {
+				count = 0
+			}
+			return &ast.ArrayType{
+				Len: c.intExpr(count),
+				Elt: c.kandeloStructFieldType(dt.Type, c.Type(dt.Type, pos).Go, pos),
+			}
+		}
+	}
+	return goType
+}
+
 func (c *typeConv) Struct(dt *dwarf.StructType, pos token.Pos) (expr *ast.StructType, csyntax string, align int64) {
 	// Minimum alignment for a struct is 1 byte.
 	align = 1
@@ -3113,7 +3135,7 @@ func (c *typeConv) Struct(dt *dwarf.StructType, pos token.Pos) (expr *ast.Struct
 		// promoting the fields of the inner struct.
 
 		t := c.Type(ft, pos)
-		tgo := t.Go
+		tgo := c.kandeloStructFieldType(ft, t.Go, pos)
 		size := t.Size
 		talign := t.Align
 		if f.BitOffset > 0 || f.BitSize > 0 {
