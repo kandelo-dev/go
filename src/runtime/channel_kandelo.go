@@ -37,6 +37,8 @@ import (
 // Kandelo host provisioned the channel at all.
 var kandeloChannelBase uint32
 
+const _NSIG = 65
+
 // Channel region layout, offsets relative to the channel base. Must match
 // crates/shared/src/lib.rs (mod channel) in the Kandelo repository.
 const (
@@ -60,6 +62,8 @@ const (
 const (
 	sysWrite        int32 = 4
 	sysClockGettime int32 = 40
+	sysSigaction    int32 = 36
+	sysRaise        int32 = 38
 	sysGetrandom    int32 = 120
 	sysExitGroup    int32 = 387
 )
@@ -119,6 +123,26 @@ func kandeloInitChannelBase() {
 		getg().m.channelBase = uintptr(kandeloCgoChannelBase())
 	} else {
 		getg().m.channelBase = uintptr(kandeloChannelBase)
+	}
+}
+
+func kandeloIgnoreSigpipe() {
+	action := [16]byte{1}
+	_, errno := doSyscall6(sysSigaction, 13, int64(uintptr(unsafe.Pointer(&action[0]))), 0, 0, 0, 0)
+	if errno != 0 {
+		throw("cannot ignore SIGPIPE")
+	}
+}
+
+func kandeloStdoutSigpipe() {
+	action := [16]byte{}
+	_, errno := doSyscall6(sysSigaction, 13, int64(uintptr(unsafe.Pointer(&action[0]))), 0, 0, 0, 0)
+	if errno != 0 {
+		throw("cannot restore SIGPIPE")
+	}
+	_, errno = doSyscall6(sysRaise, 13, 0, 0, 0, 0, 0)
+	if errno != 0 {
+		throw("cannot raise SIGPIPE")
 	}
 }
 

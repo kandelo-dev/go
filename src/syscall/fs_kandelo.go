@@ -21,20 +21,6 @@ import (
 	"unsafe"
 )
 
-func init() {
-	// Try to set stdio to non-blocking mode before the os package
-	// calls NewFile for each fd. NewFile queries the non-blocking flag
-	// but doesn't change it, even if the runtime supports non-blocking
-	// stdio. Since WebAssembly modules are single-threaded, blocking
-	// system calls temporarily halt execution of the module. If the
-	// runtime supports non-blocking stdio, the Go runtime is able to
-	// use the WASI net poller to poll for read/write readiness and is
-	// able to schedule goroutines while waiting.
-	SetNonblock(0, true)
-	SetNonblock(1, true)
-	SetNonblock(2, true)
-}
-
 type uintptr32 = uint32
 type size = uint32
 type fdflags = uint32
@@ -651,6 +637,19 @@ func Openat(dirFd int, path string, openmode int, perm uint32) (int, error) {
 		return -1, kandeloErrno(errno)
 	}
 	return int(ret), nil
+}
+
+func Faccessat(dirFd int, path string, mode uint32, flags int) error {
+	if path == "" {
+		return ENOENT
+	}
+	p, ptr, err := pathArg(path)
+	if err != nil {
+		return err
+	}
+	_, errno := kandeloSyscall6(kSysFaccessat2, int64(dirFd), ptr, int64(mode), int64(flags), 0, 0)
+	runtime.KeepAlive(p)
+	return errnoErr(kandeloErrno(errno))
 }
 
 func Close(fd int) error {

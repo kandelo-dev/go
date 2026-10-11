@@ -78,6 +78,9 @@ func (e Errno) Error() string {
 	if 0 <= int(e) && int(e) < len(errorstr) {
 		s := errorstr[e]
 		if s != "" {
+			if s[0] >= 'A' && s[0] <= 'Z' {
+				return string(s[0]-'A'+'a') + s[1:]
+			}
 			return s
 		}
 	}
@@ -411,23 +414,80 @@ func Sysctl(key string) (string, error) {
 }
 
 func Getuid() int {
-	return 1
+	ret, _ := kandeloSyscall6(kSysGetuid, 0, 0, 0, 0, 0, 0)
+	return int(ret)
 }
 
 func Getgid() int {
-	return 1
+	ret, _ := kandeloSyscall6(kSysGetgid, 0, 0, 0, 0, 0, 0)
+	return int(ret)
 }
 
 func Geteuid() int {
-	return 1
+	ret, _ := kandeloSyscall6(kSysGeteuid, 0, 0, 0, 0, 0, 0)
+	return int(ret)
 }
 
 func Getegid() int {
-	return 1
+	ret, _ := kandeloSyscall6(kSysGetegid, 0, 0, 0, 0, 0, 0)
+	return int(ret)
 }
 
 func Getgroups() ([]int, error) {
-	return []int{1}, nil
+	count, errno := kandeloSyscall6(kSysGetgroups, 0, 0, 0, 0, 0, 0)
+	if errno != 0 {
+		return nil, kandeloErrno(errno)
+	}
+	if count == 0 {
+		return []int{}, nil
+	}
+	groups := make([]uint32, int(count))
+	actual, errno := kandeloSyscall6(kSysGetgroups, count, int64(uintptr(unsafe.Pointer(&groups[0]))), 0, 0, 0, 0)
+	runtime.KeepAlive(groups)
+	if errno != 0 {
+		return nil, kandeloErrno(errno)
+	}
+	ids := make([]int, int(actual))
+	for index, group := range groups[:actual] {
+		ids[index] = int(group)
+	}
+	return ids, nil
+}
+
+func Setgroups(gids []int) error {
+	groups := make([]uint32, len(gids))
+	for index, gid := range gids {
+		if gid < 0 || uint64(gid) > uint64(^uint32(0)) {
+			return EINVAL
+		}
+		groups[index] = uint32(gid)
+	}
+	var pointer int64
+	if len(groups) != 0 {
+		pointer = int64(uintptr(unsafe.Pointer(&groups[0])))
+	}
+	_, errno := kandeloSyscall6(kSysSetgroups, int64(len(groups)), pointer, 0, 0, 0, 0)
+	runtime.KeepAlive(groups)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	return nil
+}
+
+func Setresuid(ruid, euid, suid int) error {
+	_, errno := kandeloSyscall6(kSysSetresuid, int64(ruid), int64(euid), int64(suid), 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	return nil
+}
+
+func Setresgid(rgid, egid, sgid int) error {
+	_, errno := kandeloSyscall6(kSysSetresgid, int64(rgid), int64(egid), int64(sgid), 0, 0, 0)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	return nil
 }
 
 func Getpid() int {

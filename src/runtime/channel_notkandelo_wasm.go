@@ -6,6 +6,8 @@
 
 package runtime
 
+const _NSIG = 0
+
 // kandeloInitChannelBase is a no-op on wasm GOOSes other than kandelo (js,
 // wasip1): they have no syscall channel to capture. osinit in os_wasm.go calls
 // this unconditionally; the kandelo build supplies the real implementation in
@@ -13,6 +15,10 @@ package runtime
 //
 //go:nosplit
 func kandeloInitChannelBase() {}
+
+func kandeloIgnoreSigpipe() {}
+
+func kandeloStdoutSigpipe() {}
 
 // newosprocKandelo is only reachable from newosproc's GOOS=="kandelo" branch,
 // which is dead-code-eliminated on js/wasip1. It must still be defined so the

@@ -18,6 +18,7 @@ func osinit() {
 	// this M's own mOS.channelBase, so doSyscall reads a per-M base. No-op on
 	// js/wasip1. See kandeloInitChannelBase in channel_kandelo.go.
 	kandeloInitChannelBase()
+	kandeloIgnoreSigpipe()
 	numCPUStartup = getCPUCount()
 	getg().m.procid = 2
 }
@@ -50,13 +51,13 @@ type mOS struct {
 	// than a single package word. The main M captures it in osinit; a future
 	// thread M captures it in its entry trampoline (see channel_kandelo.go,
 	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
-	channelBase    uintptr
-	cgoChannelBase uint32
+	channelBase             uintptr
+	cgoChannelBase          uint32
 	callbackCurgStackOffset uintptr
-	callbackCurgPC uintptr
-	callbackG0SP   uintptr
-	foreignCStackActive uintptr
-	clockTimespec  [2]int64
+	callbackCurgPC          uintptr
+	callbackG0SP            uintptr
+	foreignCStackActive     uintptr
+	clockTimespec           [2]int64
 }
 
 func osyield()
@@ -112,8 +113,6 @@ func mdestroy(mp *m) {
 }
 
 // wasm has no signals
-const _NSIG = 0
-
 func signame(sig uint32) string {
 	return ""
 }
@@ -143,7 +142,12 @@ func newosproc(mp *m) {
 // Do nothing on WASM platform, always return EPIPE to caller.
 //
 //go:linkname os_sigpipe os.sigpipe
-func os_sigpipe() {}
+func os_sigpipe() {
+	if GOOS == "kandelo" && (signal_ignored(13) || sigsend(13)) {
+		return
+	}
+	kandeloStdoutSigpipe()
+}
 
 //go:linkname syscall_now syscall.now
 func syscall_now() (sec int64, nsec int32) {

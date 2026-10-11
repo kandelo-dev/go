@@ -42,6 +42,10 @@ const (
 	kSysChdir       int32 = 24
 	kSysGetpid      int32 = 28
 	kSysGetppid     int32 = 29
+	kSysGetuid      int32 = 30
+	kSysGeteuid     int32 = 31
+	kSysGetgid      int32 = 32
+	kSysGetegid     int32 = 33
 	kSysKill        int32 = 35
 	kSysIsatty      int32 = 42
 	kSysSocket      int32 = 50
@@ -77,9 +81,14 @@ const (
 	kSysGetdents64  int32 = 122
 	kSysUtimensat   int32 = 125
 	kSysFchdir      int32 = 127
+	kSysSetresuid   int32 = 131
+	kSysSetresgid   int32 = 133
+	kSysGetgroups   int32 = 135
+	kSysSetgroups   int32 = 136
 	kSysWait4       int32 = 139
 	kSysGetpgid     int32 = 214
 	kSysSpawn       int32 = 500
+	kSysFaccessat2  int32 = 382
 )
 
 // kAtFdcwd is the dirfd sentinel meaning "resolve relative to the current
