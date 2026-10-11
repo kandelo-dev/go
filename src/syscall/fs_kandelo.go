@@ -709,6 +709,7 @@ func ReadDirent(fd int, buf []byte) (int, error) {
 type Stat_t struct {
 	Dev      uint64
 	Ino      uint64
+	Rdev     uint64
 	Filetype uint8
 	Nlink    uint64
 	Size     uint64
@@ -834,6 +835,10 @@ func Fchown(fd int, uid, gid int) error {
 }
 
 func Lchown(path string, uid, gid int) error {
+	return Fchownat(int(kAtFdcwd), path, uid, gid, aTSymlinkNofollow)
+}
+
+func Fchownat(dirFd int, path string, uid, gid int, flags int) error {
 	if path == "" {
 		return ENOENT
 	}
@@ -841,7 +846,7 @@ func Lchown(path string, uid, gid int) error {
 	if err != nil {
 		return err
 	}
-	_, errno := kandeloSyscall6(kSysFchownat, int64(kAtFdcwd), ptr, int64(uid), int64(gid), aTSymlinkNofollow, 0)
+	_, errno := kandeloSyscall6(kSysFchownat, int64(dirFd), ptr, int64(uid), int64(gid), int64(flags), 0)
 	runtime.KeepAlive(p)
 	return errnoErr(kandeloErrno(errno))
 }

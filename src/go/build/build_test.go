@@ -60,6 +60,17 @@ func TestMatch(t *testing.T) {
 	nomatch(runtime.GOOS+","+runtime.GOARCH+",bar", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "bar": true})
 }
 
+func TestKandeloMatchesUnix(t *testing.T) {
+	ctxt := Default
+	ctxt.GOOS = "kandelo"
+	if !ctxt.matchAuto("unix", make(map[string]bool)) {
+		t.Fatal("Kandelo must match the unix build tag")
+	}
+	if ctxt.matchAuto("!unix", make(map[string]bool)) {
+		t.Fatal("Kandelo must not match the !unix build tag")
+	}
+}
+
 func TestDotSlashImport(t *testing.T) {
 	p, err := ImportDir("testdata/other", 0)
 	if err != nil {

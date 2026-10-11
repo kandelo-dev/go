@@ -48,6 +48,7 @@ var UnixOS = map[string]bool{
 	"hurd":      true,
 	"illumos":   true,
 	"ios":       true,
+	"kandelo":   true,
 	"linux":     true,
 	"netbsd":    true,
 	"openbsd":   true,

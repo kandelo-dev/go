@@ -156,6 +156,7 @@ type kernelStat struct {
 func (ks *kernelStat) toStat(st *Stat_t) {
 	st.Dev = ks.Dev
 	st.Ino = ks.Ino
+	st.Rdev = ks.Rdev
 	st.Nlink = uint64(ks.Nlink)
 	st.Size = ks.Size
 	st.Uid = ks.Uid

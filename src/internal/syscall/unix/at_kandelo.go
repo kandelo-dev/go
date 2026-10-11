@@ -49,8 +49,7 @@ func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
 }
 
 func Fchownat(dirfd int, path string, uid, gid int, flags int) error {
-	// Kandelo has no per-file ownership model; report the honest failure.
-	return syscall.ENOSYS
+	return syscall.Fchownat(dirfd, path, uid, gid, flags)
 }
 
 func Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) error {
