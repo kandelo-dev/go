@@ -91,6 +91,8 @@ const (
 	kSysFaccessat2  int32 = 382
 )
 
+const kSysClockGettime int32 = 40
+
 // kAtFdcwd is the dirfd sentinel meaning "resolve relative to the current
 // working directory", matching musl's AT_FDCWD on this arch.
 const kAtFdcwd int32 = -100

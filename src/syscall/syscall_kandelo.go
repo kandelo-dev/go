@@ -585,7 +585,22 @@ const (
 	clockThreadCPUTimeID
 )
 
-func clock_time_get(id clockid, precision timestamp, time *timestamp) Errno { return ENOSYS }
+func clock_time_get(id clockid, _ timestamp, time *timestamp) Errno {
+	if time == nil {
+		return EFAULT
+	}
+	var timespec [2]int64
+	_, errno := kandeloSyscall6(kSysClockGettime, int64(id), int64(uintptr(unsafe.Pointer(&timespec[0]))), 0, 0, 0, 0)
+	runtime.KeepAlive(&timespec)
+	if errno != 0 {
+		return kandeloErrno(errno)
+	}
+	if timespec[0] < 0 || timespec[1] < 0 || timespec[1] >= 1e9 {
+		return EIO
+	}
+	*time = timestamp(timespec[0])*1e9 + timestamp(timespec[1])
+	return 0
+}
 
 func SetNonblock(fd int, nonblocking bool) error {
 	flags, err := Fcntl(fd, F_GETFL, 0)
