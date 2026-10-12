@@ -563,7 +563,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	var abiVersionFuncIdx uint32
 	if buildcfg.GOOS == "kandelo" {
 		// Synthesize a raw () -> i32 function whose body reduces to
-		// `i32.const 43; end`. The Kandelo host does NOT call this export; it
+		// `i32.const N; end`. The Kandelo host does NOT call this export; it
 		// byte-parses the exported function body and accepts an i32.const that
 		// is returned directly (following at most one call wrapper). A normal
 		// Go wasm function carries an SP/resume prologue the parser would
@@ -572,12 +572,12 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// kandeloABIVersion must stay in sync with ABI_VERSION in the Kandelo
 		// repository's crates/shared/src/lib.rs. It is hardcoded here; when
 		// upstream Kandelo bumps ABI_VERSION, bump this to match (the host
-		// hard-rejects a mismatched marker). Last synced: ABI 48.
-		const kandeloABIVersion = 48
+		// hard-rejects a mismatched marker). Last synced: ABI 50.
+		const kandeloABIVersion = 50
 		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
 		writeUleb128(&body, 0)                  // local declaration count
-		writeI32Const(&body, kandeloABIVersion) // i32.const 48
+		writeI32Const(&body, kandeloABIVersion) // i32.const N
 		body.WriteByte(0x0b)                    // end
 		// Module function index: imported functions occupy [0, len(hostImports)),
 		// then the defined functions in fns order. This synthesized function is
