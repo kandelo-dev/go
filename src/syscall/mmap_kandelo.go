@@ -81,3 +81,17 @@ func Madvise(data []byte, advice int) error {
 	runtime.KeepAlive(data)
 	return errnoErr(kandeloErrno(errno))
 }
+
+func Mlock(data []byte) error {
+	address := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
+	_, errno := kandeloSyscall6(kSysMlock, int64(address), int64(len(data)), 0, 0, 0, 0)
+	runtime.KeepAlive(data)
+	return errnoErr(kandeloErrno(errno))
+}
+
+func Munlock(data []byte) error {
+	address := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
+	_, errno := kandeloSyscall6(kSysMunlock, int64(address), int64(len(data)), 0, 0, 0, 0)
+	runtime.KeepAlive(data)
+	return errnoErr(kandeloErrno(errno))
+}

@@ -630,9 +630,15 @@ type Rlimit struct {
 }
 
 const (
-	RLIMIT_NOFILE = iota
+	RLIMIT_NOFILE  = 7
+	RLIMIT_MEMLOCK = 8
 )
 
 func Getrlimit(which int, lim *Rlimit) error {
-	return ENOSYS
+	if lim == nil {
+		return EINVAL
+	}
+	_, errno := kandeloSyscall6(kSysGetrlimit, int64(which), int64(uintptr(unsafe.Pointer(lim))), 0, 0, 0, 0)
+	runtime.KeepAlive(lim)
+	return errnoErr(kandeloErrno(errno))
 }

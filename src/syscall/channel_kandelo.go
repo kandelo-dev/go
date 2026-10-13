@@ -62,9 +62,13 @@ const (
 	kSysPread       int32 = 64
 	kSysPwrite      int32 = 65
 	kSysOpenat      int32 = 69
+	kSysTcgetattr   int32 = 70
+	kSysTcsetattr   int32 = 71
+	kSysIoctl       int32 = 72
 	kSysPipe2       int32 = 78
 	kSysFtruncate   int32 = 79
 	kSysFsync       int32 = 80
+	kSysGetrlimit   int32 = 83
 	kSysTruncate    int32 = 85
 	kSysFchmod      int32 = 87
 	kSysFchown      int32 = 88
@@ -92,6 +96,8 @@ const (
 	kSysWait4       int32 = 139
 	kSysGetpgid     int32 = 214
 	kSysMsync       int32 = 278
+	kSysMlock       int32 = 279
+	kSysMunlock     int32 = 281
 	kSysSpawn       int32 = 500
 	kSysFaccessat2  int32 = 382
 )
