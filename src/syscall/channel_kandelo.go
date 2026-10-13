@@ -48,6 +48,8 @@ const (
 	kSysGetegid     int32 = 33
 	kSysKill        int32 = 35
 	kSysIsatty      int32 = 42
+	kSysMmap        int32 = 46
+	kSysMunmap      int32 = 47
 	kSysSocket      int32 = 50
 	kSysBind        int32 = 51
 	kSysListen      int32 = 52
@@ -87,6 +89,7 @@ const (
 	kSysSetgroups   int32 = 136
 	kSysWait4       int32 = 139
 	kSysGetpgid     int32 = 214
+	kSysMsync       int32 = 278
 	kSysSpawn       int32 = 500
 	kSysFaccessat2  int32 = 382
 )
