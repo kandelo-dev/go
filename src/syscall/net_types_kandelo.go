@@ -29,6 +29,7 @@ const (
 	SOL_SOCKET        = 1
 	SO_ERROR          = 4
 	SO_REUSEADDR      = 2
+	SO_REUSEPORT      = 15
 	SO_TYPE           = 3
 	SO_BROADCAST      = 6
 	SO_SNDBUF         = 7

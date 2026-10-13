@@ -17,6 +17,8 @@ const (
 	MAP_ANON      = 0x20
 	MAP_ANONYMOUS = MAP_ANON
 	MS_SYNC       = 4
+	MADV_NORMAL   = 0
+	MADV_RANDOM   = 1
 )
 
 var kandeloMappings = struct {
@@ -66,6 +68,16 @@ func Msync(data []byte, flags int) error {
 	}
 	address := uintptr(unsafe.Pointer(&data[0]))
 	_, errno := kandeloSyscall6(kSysMsync, int64(address), int64(len(data)), int64(flags), 0, 0, 0)
+	runtime.KeepAlive(data)
+	return errnoErr(kandeloErrno(errno))
+}
+
+func Madvise(data []byte, advice int) error {
+	if len(data) == 0 {
+		return EINVAL
+	}
+	address := uintptr(unsafe.Pointer(&data[0]))
+	_, errno := kandeloSyscall6(kSysMadvise, int64(address), int64(len(data)), int64(advice), 0, 0, 0)
 	runtime.KeepAlive(data)
 	return errnoErr(kandeloErrno(errno))
 }

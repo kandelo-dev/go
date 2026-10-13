@@ -80,9 +80,11 @@ const (
 	kSysGetsockname int32 = 114
 	kSysGetpeername int32 = 115
 	kSysGetrandom   int32 = 120
+	kSysFlock       int32 = 121
 	kSysGetdents64  int32 = 122
 	kSysUtimensat   int32 = 125
 	kSysFchdir      int32 = 127
+	kSysMadvise     int32 = 128
 	kSysSetresuid   int32 = 131
 	kSysSetresgid   int32 = 133
 	kSysGetgroups   int32 = 135

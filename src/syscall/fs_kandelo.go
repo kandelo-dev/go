@@ -652,6 +652,15 @@ func Faccessat(dirFd int, path string, mode uint32, flags int) error {
 	return errnoErr(kandeloErrno(errno))
 }
 
+func Access(path string, mode uint32) error {
+	return Faccessat(int(kAtFdcwd), path, mode, 0)
+}
+
+func Flock(fd int, how int) error {
+	_, errno := kandeloSyscall6(kSysFlock, int64(fd), int64(how), 0, 0, 0, 0)
+	return errnoErr(kandeloErrno(errno))
+}
+
 func Close(fd int) error {
 	errno := fd_close(int32(fd))
 	return errnoErr(errno)

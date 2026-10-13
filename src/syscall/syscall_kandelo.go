@@ -234,6 +234,7 @@ const (
 	O_TRUNC     = 01000
 	O_APPEND    = 02000
 	O_EXCL      = 0200
+	O_DSYNC     = 0o10000
 	O_SYNC      = 0o4010000
 	O_DIRECTORY = 0o200000
 	O_NOFOLLOW  = 0o400000
@@ -389,6 +390,13 @@ type Credential struct {
 }
 
 var ForkLock sync.RWMutex
+
+const (
+	LOCK_SH = 1
+	LOCK_EX = 2
+	LOCK_NB = 4
+	LOCK_UN = 8
+)
 
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	return 0, 0, ENOSYS
