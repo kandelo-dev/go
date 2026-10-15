@@ -132,6 +132,7 @@ var findTests = []FindTest{
 			20, 21, 21, 22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30,
 			30, 31, 31, 32, 32, 33, 33, 34, 34, 35, 35, 36),
 	},
+	{`(?U)^(a|aa){0,40}$`, "aa", build(1, 0, 2, 1, 2)},
 }
 
 // build is a helper to construct a [][]int by extracting n sequences from x.

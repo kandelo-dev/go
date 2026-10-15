@@ -86,7 +86,16 @@ func (c *compiler) init() {
 var anyRuneNotNL = []rune{0, '\n' - 1, '\n' + 1, unicode.MaxRune}
 var anyRune = []rune{0, unicode.MaxRune}
 
+const maxCompileDepth = 32
+
 func (c *compiler) compile(re *Regexp) frag {
+	return c.compileDepth(re, 0)
+}
+
+func (c *compiler) compileDepth(re *Regexp, depth int) frag {
+	if depth == maxCompileDepth {
+		return c.compileIterative(re)
+	}
 	switch re.Op {
 	case OpNoMatch:
 		return c.fail()
@@ -126,15 +135,15 @@ func (c *compiler) compile(re *Regexp) frag {
 		return c.empty(EmptyNoWordBoundary)
 	case OpCapture:
 		bra := c.cap(uint32(re.Cap << 1))
-		sub := c.compile(re.Sub[0])
+		sub := c.compileDepth(re.Sub[0], depth+1)
 		ket := c.cap(uint32(re.Cap<<1 | 1))
 		return c.cat(c.cat(bra, sub), ket)
 	case OpStar:
-		return c.star(c.compile(re.Sub[0]), re.Flags&NonGreedy != 0)
+		return c.star(c.compileDepth(re.Sub[0], depth+1), re.Flags&NonGreedy != 0)
 	case OpPlus:
-		return c.plus(c.compile(re.Sub[0]), re.Flags&NonGreedy != 0)
+		return c.plus(c.compileDepth(re.Sub[0], depth+1), re.Flags&NonGreedy != 0)
 	case OpQuest:
-		return c.quest(c.compile(re.Sub[0]), re.Flags&NonGreedy != 0)
+		return c.quest(c.compileDepth(re.Sub[0], depth+1), re.Flags&NonGreedy != 0)
 	case OpConcat:
 		if len(re.Sub) == 0 {
 			return c.nop()
@@ -142,20 +151,103 @@ func (c *compiler) compile(re *Regexp) frag {
 		var f frag
 		for i, sub := range re.Sub {
 			if i == 0 {
-				f = c.compile(sub)
+				f = c.compileDepth(sub, depth+1)
 			} else {
-				f = c.cat(f, c.compile(sub))
+				f = c.cat(f, c.compileDepth(sub, depth+1))
 			}
 		}
 		return f
 	case OpAlternate:
 		var f frag
 		for _, sub := range re.Sub {
-			f = c.alt(f, c.compile(sub))
+			f = c.alt(f, c.compileDepth(sub, depth+1))
 		}
 		return f
 	}
 	panic("regexp: unhandled case in compile")
+}
+
+type compileFrame struct {
+	regexp   *Regexp
+	next     int
+	fragment frag
+	opening  frag
+}
+
+func (c *compiler) compileIterative(re *Regexp) frag {
+	frames := []compileFrame{{regexp: re}}
+	var result frag
+	completed := false
+	for len(frames) > 0 {
+		frame := &frames[len(frames)-1]
+		if !completed {
+			switch frame.regexp.Op {
+			case OpCapture:
+				frame.opening = c.cap(uint32(frame.regexp.Cap << 1))
+			case OpStar, OpPlus, OpQuest:
+			case OpConcat:
+				if len(frame.regexp.Sub) == 0 {
+					result = c.nop()
+					frames = frames[:len(frames)-1]
+					completed = true
+					continue
+				}
+			case OpAlternate:
+				if len(frame.regexp.Sub) == 0 {
+					result = frag{}
+					frames = frames[:len(frames)-1]
+					completed = true
+					continue
+				}
+			default:
+				result = c.compileDepth(frame.regexp, 0)
+				frames = frames[:len(frames)-1]
+				completed = true
+				continue
+			}
+			frame.next = 1
+			frames = append(frames, compileFrame{regexp: frame.regexp.Sub[0]})
+			continue
+		}
+
+		switch frame.regexp.Op {
+		case OpCapture:
+			closing := c.cap(uint32(frame.regexp.Cap<<1 | 1))
+			result = c.cat(c.cat(frame.opening, result), closing)
+		case OpStar:
+			result = c.star(result, frame.regexp.Flags&NonGreedy != 0)
+		case OpPlus:
+			result = c.plus(result, frame.regexp.Flags&NonGreedy != 0)
+		case OpQuest:
+			result = c.quest(result, frame.regexp.Flags&NonGreedy != 0)
+		case OpConcat:
+			if frame.next == 1 {
+				frame.fragment = result
+			} else {
+				frame.fragment = c.cat(frame.fragment, result)
+			}
+			if frame.next < len(frame.regexp.Sub) {
+				child := frame.regexp.Sub[frame.next]
+				frame.next++
+				frames = append(frames, compileFrame{regexp: child})
+				completed = false
+				continue
+			}
+			result = frame.fragment
+		case OpAlternate:
+			frame.fragment = c.alt(frame.fragment, result)
+			if frame.next < len(frame.regexp.Sub) {
+				child := frame.regexp.Sub[frame.next]
+				frame.next++
+				frames = append(frames, compileFrame{regexp: child})
+				completed = false
+				continue
+			}
+			result = frame.fragment
+		}
+		frames = frames[:len(frames)-1]
+	}
+	return result
 }
 
 func (c *compiler) inst(op InstOp) frag {
