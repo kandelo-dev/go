@@ -393,25 +393,24 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendp(p, AI32Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
 			p = appendp(p, AI32LeU)
 		} else {
-			// large stack: SP-framesize <= stackguard-StackSmall
-			//              SP <= stackguard+(framesize-StackSmall)
-			// Get SP
-			// Get g
-			// I32WrapI64
-			// I32Load $stackguard0
-			// I32Const $(framesize-StackSmall)
-			// I32Add
-			// I32GtU
+			// large stack: SP <= stackguard or SP-stackguard <= framesize-StackSmall
+			// Subtract only after comparing SP with stackguard, since adding the
+			// frame size to stackPreempt would wrap around to a small address.
 
 			p = appendp(p, AGet, regAddr(REG_SP))
 			p = appendp(p, AGet, regAddr(REGG))
 			p = appendp(p, AI32WrapI64)
 			p = appendp(p, AI32Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
-			p = appendp(p, AI32Const, constAddr(framesize-abi.StackSmall))
-			p = appendp(p, AI32Add)
 			p = appendp(p, AI32LeU)
+			p = appendp(p, AGet, regAddr(REG_SP))
+			p = appendp(p, AGet, regAddr(REGG))
+			p = appendp(p, AI32WrapI64)
+			p = appendp(p, AI32Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
+			p = appendp(p, AI32Sub)
+			p = appendp(p, AI32Const, constAddr(framesize-abi.StackSmall))
+			p = appendp(p, AI32LeU)
+			p = appendp(p, AI32Or)
 		}
-		// TODO(neelance): handle wraparound case
 
 		p = appendp(p, AIf)
 		// This CALL does *not* have a resume point after it
