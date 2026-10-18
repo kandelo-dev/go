@@ -1269,7 +1269,11 @@ func loadKandeloExecutableGlue(ctxt *Link) {
 	}
 	defer os.RemoveAll(dir)
 	extld := ctxt.extld()
-	for _, name := range []string{"channel_syscall", "compiler_rt", "cxxrt"} {
+	glue := []string{"channel_syscall", "compiler_rt", "cxxrt"}
+	if kandeloLinksDlopen() {
+		glue = append(glue, "dlopen")
+	}
+	for _, name := range glue {
 		source := ctxt.findLibPath(name + ".c")
 		if !filepath.IsAbs(source) {
 			Exitf("GOOS=kandelo: SDK compiler did not report an absolute %s.c path", name)
@@ -1284,6 +1288,16 @@ func loadKandeloExecutableGlue(ctxt *Link) {
 	}
 }
 
+func kandeloLinksDlopen() bool {
+	flags := append(append([]string(nil), ldflag...), flagExtldflags...)
+	for index, flag := range flags {
+		if flag == "-ldl" || flag == "-l" && index+1 < len(flags) && flags[index+1] == "dl" {
+			return true
+		}
+	}
+	return false
+}
+
 func loadKandeloCgoArchives(ctxt *Link) {
 	var searchPaths []string
 	var libraries []string
@@ -1291,6 +1305,13 @@ func loadKandeloCgoArchives(ctxt *Link) {
 	for index := 0; index < len(linkerFlags); index++ {
 		flag := linkerFlags[index]
 		switch {
+		case strings.HasPrefix(flag, "-Wl,--export-dynamic-symbol="):
+			name := strings.TrimPrefix(flag, "-Wl,--export-dynamic-symbol=")
+			if name == "" {
+				Errorf("GOOS=kandelo: empty C export name")
+				continue
+			}
+			ctxt.WasmCExports = append(ctxt.WasmCExports, name)
 		case flag == "-L" && index+1 < len(linkerFlags):
 			index++
 			searchPaths = append(searchPaths, linkerFlags[index])
@@ -1298,9 +1319,13 @@ func loadKandeloCgoArchives(ctxt *Link) {
 			searchPaths = append(searchPaths, flag[2:])
 		case flag == "-l" && index+1 < len(linkerFlags):
 			index++
-			libraries = append(libraries, linkerFlags[index])
+			if linkerFlags[index] != "dl" {
+				libraries = append(libraries, linkerFlags[index])
+			}
 		case strings.HasPrefix(flag, "-l") && len(flag) > 2:
-			libraries = append(libraries, flag[2:])
+			if flag != "-ldl" {
+				libraries = append(libraries, flag[2:])
+			}
 		case strings.HasSuffix(flag, ".a") && filepath.IsAbs(flag):
 			libraries = append(libraries, flag)
 		}

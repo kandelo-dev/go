@@ -159,6 +159,15 @@ func hostArchive(ctxt *Link, name string) {
 			}
 		}
 		if buildcfg.GOOS == "kandelo" {
+			for _, name := range ctxt.WasmCExports {
+				if symbol := ctxt.loader.Lookup(name, 0); symbol != 0 && ctxt.loader.SymType(symbol) != 0 {
+					continue
+				}
+				if off := armap[name]; off != 0 && !loaded[off] {
+					load = append(load, off)
+					loaded[off] = true
+				}
+			}
 			for _, host := range ctxt.WasmHostFunctions {
 				for _, relocation := range host.Object.CodeRelocations {
 					if relocation.Offset < host.Function.BodyOffset || uint64(relocation.Offset) >= uint64(host.Function.BodyOffset)+uint64(len(host.Function.Body)) {

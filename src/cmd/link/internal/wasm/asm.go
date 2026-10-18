@@ -71,6 +71,12 @@ type wasmDataAddressGlobal struct {
 	Address uint32
 }
 
+type wasmCExport struct {
+	Name  string
+	Kind  byte
+	Index uint32
+}
+
 func readWasmImport(ldr *loader.Loader, s loader.Sym) obj.WasmImport {
 	var wi obj.WasmImport
 	wi.Read(ldr.Data(s))
@@ -401,6 +407,13 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			}
 		}
 	}
+	if buildcfg.GOOS == "kandelo" {
+		for _, name := range ctxt.WasmCExports {
+			if _, ok := globalDataAddresses[name]; ok {
+				dataAddressGlobalNames[name] = "C export"
+			}
+		}
+	}
 	var dataAddressGlobalNamesSorted []string
 	for name := range dataAddressGlobalNames {
 		dataAddressGlobalNamesSorted = append(dataAddressGlobalNamesSorted, name)
@@ -417,6 +430,45 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			address = functionIndex - uint32(len(hostImports)) + funcValueOffset
 		}
 		dataAddressGlobals = append(dataAddressGlobals, wasmDataAddressGlobal{Name: name, Address: address})
+	}
+	var cExports []wasmCExport
+	if buildcfg.GOOS == "kandelo" {
+		requested := make(map[string]bool)
+		for _, name := range ctxt.WasmCExports {
+			requested[name] = true
+		}
+		names := make([]string, 0, len(requested))
+		for name := range requested {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		globalBase := uint32(10)
+		for _, present := range []bool{hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, hasChannelBase} {
+			if present {
+				globalBase++
+			}
+		}
+		for _, name := range names {
+			if symbol := ldr.Lookup(name, 0); symbol != 0 {
+				if _, ok := ctxt.WasmHostFunctions[symbol]; ok {
+					index, present := hostFunctionIndices[name]
+					if !present {
+						ld.Exitf("GOOS=kandelo: requested C function %s has no live Wasm body", name)
+					}
+					cExports = append(cExports, wasmCExport{Name: name, Kind: 0x00, Index: index})
+					continue
+				}
+			}
+			if _, ok := globalDataAddresses[name]; ok {
+				index := sort.SearchStrings(dataAddressGlobalNamesSorted, name)
+				if index == len(dataAddressGlobalNamesSorted) || dataAddressGlobalNamesSorted[index] != name {
+					ld.Exitf("GOOS=kandelo: requested C data %s has no address global", name)
+				}
+				cExports = append(cExports, wasmCExport{Name: name, Kind: 0x03, Index: globalBase + uint32(index)})
+				continue
+			}
+			ld.Exitf("GOOS=kandelo: requested C export %s is not linked", name)
+		}
 	}
 	for i, fn := range ctxt.Textp {
 		if host, ok := ctxt.WasmHostFunctions[fn]; ok {
@@ -685,7 +737,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		writeMemorySec(ctxt, ldr)
 	}
 	writeGlobalSec(ctxt, ldr, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, hasChannelBase, dataAddressGlobals)
-	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx, initTLSFuncIdx, startTLSFuncIdx, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, hasChannelBase)
+	writeExportSec(ctxt, ldr, len(hostImports), abiVersionFuncIdx, threadSlotsFuncIdx, preallocateThreadSlotsFuncIdx, initTLSFuncIdx, startTLSFuncIdx, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, hasChannelBase, cExports)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
@@ -999,7 +1051,7 @@ func writeGlobalSec(ctxt *ld.Link, ldr *loader.Loader, hasMemoryBase, hasTableBa
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
 // The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32, initTLSFuncIdx, startTLSFuncIdx uint32, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, hasChannelBase bool) {
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVersionFuncIdx uint32, threadSlotsFuncIdx uint32, preallocateThreadSlotsFuncIdx uint32, initTLSFuncIdx, startTLSFuncIdx uint32, hasMemoryBase, hasTableBase, hasStackPointer, hasCTLSBase, hasChannelBase bool, cExports []wasmCExport) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
@@ -1042,7 +1094,7 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 		// __wasm_posix_thread_slots(1) + preallocation marker(1) +
 		// __tls_base(1) + __heap_base(1) +
 		// __indirect_function_table(1).
-		exportCount := 7 + len(ldr.WasmExports)
+		exportCount := 7 + len(ldr.WasmExports) + len(cExports)
 		bootstrap := ldr.Lookup("wasm_export_cgo_thread_bootstrap", 0)
 		if bootstrap != 0 && ldr.AttrReachable(bootstrap) {
 			exportCount++
@@ -1086,6 +1138,11 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int, abiVe
 			writeName(ctxt.Out, ldr.SymName(s))
 			ctxt.Out.WriteByte(0x00)            // func export
 			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
+		}
+		for _, exported := range cExports {
+			writeName(ctxt.Out, exported.Name)
+			ctxt.Out.WriteByte(exported.Kind)
+			writeUleb128(ctxt.Out, uint64(exported.Index))
 		}
 		if bootstrap != 0 && ldr.AttrReachable(bootstrap) {
 			idx := uint32(lenHostImports) + uint32(ldr.SymValue(bootstrap)>>16) - funcValueOffset

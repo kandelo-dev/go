@@ -98,6 +98,7 @@ type Link struct {
 	WasmHostFunctions   map[loader.Sym]WasmHostFunction
 	WasmWeakFunctions   map[loader.Sym]bool
 	WasmDataSymbols     map[string]loader.Sym
+	WasmCExports        []string
 	WasmWeakDataSymbols map[loader.Sym]bool
 	WasmTLSSymbols      map[string]uint32
 	WasmTLSTemplate     []byte
