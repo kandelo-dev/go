@@ -27,6 +27,13 @@ type kandeloSigaction struct {
 	mask    uint64
 }
 
+// Kandelo's signal numbers match the generic Linux table. Reuse Go's
+// disposition policy and names without selecting native Unix handlers.
+type sigTabT struct {
+	flags int32
+	name  string
+}
+
 var kandeloSignalHandler uint32
 var kandeloPreviousSignals [65]kandeloSigaction
 var kandeloSavedSignals [65]bool
@@ -40,6 +47,12 @@ var _cgo_kandelo_signal_dispatch unsafe.Pointer
 func kandeloGoSignalHandler(signum uint32) {
 	if sigsend(signum) || signal_ignored(signum) {
 		return
+	}
+	if sigtable[signum].flags&(_SigThrow|_SigPanic) != 0 {
+		// Delivery is cooperative, so use the existing Go fatal traceback
+		// at this checkpoint rather than pretending to have a native signal
+		// context. throw prints the actual goroutines and exits normally 2.
+		throw(sigtable[signum].name)
 	}
 	// These asynchronous signals terminate an ordinary Go program when
 	// no notification channel accepts them. A delivery can already be in
@@ -58,15 +71,12 @@ func kandeloGoSignalHandler(signum uint32) {
 }
 
 // Kandelo has Linux-compatible signal numbers. As on other Go Unix
-// targets, nonfatal asynchronous signals are caught without notifying
-// user code until Notify is called. Leave job-control and fatal signals
-// to the kernel, and leave musl's private signals 32-34 alone.
+// targets, install Go's asynchronous disposition policy before Notify.
+// Leave default job-control behavior to the kernel until requested, and
+// leave musl's private signals 32-34 alone.
 func kandeloDefaultGoSignal(signum uint32) bool {
-	switch signum {
-	case 10, 12, 13, 14, 17, 23, 24, 25, 26, 27, 28, 29, 30:
-		return true
-	}
-	return signum >= 35 && signum <= 64
+	flags := sigtable[signum].flags
+	return flags != 0 && flags&(_SigDefault|_SigSetStack) == 0
 }
 
 func initsig(preinit bool) {
