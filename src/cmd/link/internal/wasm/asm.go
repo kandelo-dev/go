@@ -622,10 +622,10 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// reject, so the body is emitted directly here.
 		//
 		// kandeloABIVersion must stay in sync with ABI_VERSION in the Kandelo
-		// repository's crates/shared/src/lib.rs. It is hardcoded here; when
+		// repository's crates/program-abi/src/lib.rs. It is hardcoded here; when
 		// upstream Kandelo bumps ABI_VERSION, bump this to match (the host
-		// hard-rejects a mismatched marker). Last synced: ABI 50.
-		const kandeloABIVersion = 50
+		// hard-rejects a mismatched marker). Last synced: ABI 55.
+		const kandeloABIVersion = 55
 		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
 		writeUleb128(&body, 0)                  // local declaration count
