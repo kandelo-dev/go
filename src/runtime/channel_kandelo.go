@@ -42,12 +42,13 @@ const _NSIG = 65
 // Channel region layout, offsets relative to the channel base. Must match
 // crates/shared/src/lib.rs (mod channel) in the Kandelo repository.
 const (
-	chStatus = 0  // u32, atomic
-	chNumber = 4  // u32 syscall number
-	chArgs   = 8  // 6 * i64 arguments
-	chReturn = 56 // i64 return value
-	chErrno  = 64 // i32 errno value
-	chFlags  = 68 // u32 request flags (always 0 for a plain syscall)
+	chStatus    = 0     // u32, atomic
+	chNumber    = 4     // u32 syscall number
+	chArgs      = 8     // 6 * i64 arguments
+	chReturn    = 56    // i64 return value
+	chErrno     = 64    // i32 errno value
+	chFlags     = 68    // u32 request flags (always 0 for a plain syscall)
+	chSigSignum = 65552 // u32 pending signal / terminal retirement marker
 )
 
 // ChannelStatus values (crates/shared/src/lib.rs).
@@ -330,5 +331,14 @@ func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno in
 
 	// Release the channel back to Idle for the next syscall.
 	atomicStore32(statusPtr, chIdle)
+	// SIGKILL is never a catchable signal. The host uses this channel marker
+	// to unwind a blocked instance after teardown or a committed process exit.
+	// Enter the non-returning import directly, as libc does: another ordinary
+	// syscall would repark the worker instead of releasing its realm.
+	if *(*uint32)(unsafe.Pointer(base + chSigSignum)) == 9 {
+		kernelExit(128 + 9)
+		for {
+		}
+	}
 	return ret, errno
 }
