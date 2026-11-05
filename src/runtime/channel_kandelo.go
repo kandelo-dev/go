@@ -80,6 +80,15 @@ func atomicStore32(addr *uint32, val uint32)
 func atomicNotify(addr *uint32, count uint32) uint32
 func atomicWait32(addr *uint32, expected uint32, timeout int64) uint32
 
+// [RUNTIME-WORKAROUND: JSC-BLOCKED-WAIT-GC-STARVATION] Match libc's
+// bounded wait and host allocation checkpoint. The suspected JSC collection
+// starvation is documented in Kandelo's runtime-workaround registry. The
+// host returns a negative bound on engines that do not need the checkpoint.
+var kandeloHeapSafepointBound uint64 = 100_000_000
+
+//go:wasmimport kernel kernel_heap_safepoint
+func kernelHeapSafepoint() int64
+
 // doSyscall marshals a syscall into this M's channel region, runs the atomic
 // handshake, and returns the kernel's (return value, errno).
 //
@@ -343,8 +352,12 @@ func doSyscall6Raw(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno
 	// immediately if the value already differs, 0 when notified; a relaxed
 	// re-read guards against spurious wakeups (single-threaded guest, so a
 	// plain load observes the kernel's completed atomic store).
+	bound := int64(atomic.Load64(&kandeloHeapSafepointBound))
 	for {
-		atomicWait32(statusPtr, chPending, -1)
+		if atomicWait32(statusPtr, chPending, bound) == 2 {
+			bound = kernelHeapSafepoint()
+			atomic.Store64(&kandeloHeapSafepointBound, uint64(bound))
+		}
 		if *statusPtr != chPending {
 			break
 		}
