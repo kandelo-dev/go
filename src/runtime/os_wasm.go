@@ -58,6 +58,7 @@ type mOS struct {
 	callbackG0SP            uintptr
 	foreignCStackActive     uintptr
 	clockTimespec           [2]int64
+	signalDeliveryActive    bool
 }
 
 func osyield()
@@ -121,9 +122,6 @@ func crash() {
 	abort()
 }
 
-func initsig(preinit bool) {
-}
-
 // May run with m.p==nil, so write barriers are not allowed.
 //
 //go:nowritebarrier
@@ -178,9 +176,6 @@ func getfp() uintptr { return 0 }
 
 func setProcessCPUProfiler(hz int32) {}
 func setThreadCPUProfiler(hz int32)  {}
-func sigdisable(uint32)              {}
-func sigenable(uint32)               {}
-func sigignore(uint32)               {}
 
 // Stubs so tests can link correctly. These should never be called.
 func open(name *byte, mode, perm int32) int32        { panic("not implemented") }

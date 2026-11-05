@@ -130,6 +130,7 @@ const (
 	SIGPIPE
 	SIGALRM
 	SIGTERM
+	SIGSTKFLT
 	SIGCHLD
 	SIGCONT
 	SIGSTOP
@@ -139,12 +140,18 @@ const (
 	SIGURG
 	SIGXCPU
 	SIGXFSZ
-	SIGVTARLM
+	SIGVTALRM
 	SIGPROF
 	SIGWINCH
 	SIGPOLL
 	SIGPWR
 	SIGSYS
+)
+
+const (
+	SIGIO = SIGPOLL
+	// Retain the original port's misspelling for source compatibility.
+	SIGVTARLM = SIGVTALRM
 )
 
 func (s Signal) Signal() {}

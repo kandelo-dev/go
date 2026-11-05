@@ -101,11 +101,25 @@ func doSyscall(number int32, a0, a1, a2 int64) (ret int64, errno int32) {
 //go:linkname syscall_kandeloSyscall6 syscall.kandeloSyscall6
 //go:nosplit
 func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
+	if iscgo {
+		// libc owns C handler dispatch and SA_RESTART deadline accounting.
+		// Use its typed result so wasm32 long cannot truncate Go int64s.
+		call := struct {
+			arguments [7]int64
+			result    int64
+			errno     int32
+		}{arguments: [7]int64{int64(number), a0, a1, a2, a3, a4, a5}}
+		cgocall(_cgo_kandelo_syscall, unsafe.Pointer(&call))
+		return call.result, call.errno
+	}
 	entersyscallblock()
 	ret, errno = doSyscall6(number, a0, a1, a2, a3, a4, a5)
 	exitsyscall()
 	return ret, errno
 }
+
+//go:linkname _cgo_kandelo_syscall _cgo_kandelo_syscall
+var _cgo_kandelo_syscall unsafe.Pointer
 
 // kandeloInitChannelBase copies this M's syscall-channel base into its own
 // mOS.channelBase. Non-cgo builds use the serialized shared handoff word.
@@ -293,6 +307,16 @@ func newosprocKandelo(mp *m) {
 
 //go:nosplit
 func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
+	ret, errno = doSyscall6Raw(number, a0, a1, a2, a3, a4, a5)
+	kandeloDeliverSignals()
+	return ret, errno
+}
+
+// Signal return/mask restoration must not recursively consume a new delivery.
+// The outer delivery loop handles any signal exposed by restoring the mask.
+//
+//go:nosplit
+func doSyscall6Raw(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
 	base := getg().m.channelBase
 	if base == 0 {
 		// The host has not provisioned the channel base. Fail honestly rather
