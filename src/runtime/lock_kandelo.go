@@ -44,7 +44,7 @@ func lock2(l *mutex) {
 	gp.m.locks++
 	key := kandeloKey32(&l.key)
 	for !atomic.Cas(key, mutex_unlocked, mutex_locked) {
-		atomicWait32(key, mutex_locked, -1)
+		kandeloWait32Step(key, mutex_locked, -1)
 	}
 }
 
@@ -115,7 +115,7 @@ func kandeloNoteSleep(n *note, ns int64) bool {
 			}
 		}
 		getg().m.blocked = true
-		atomicWait32(key, 0, remaining)
+		kandeloWait32Step(key, 0, remaining)
 		getg().m.blocked = false
 	}
 	return true

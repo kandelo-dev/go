@@ -89,6 +89,27 @@ var kandeloHeapSafepointBound uint64 = 100_000_000
 //go:wasmimport kernel kernel_heap_safepoint
 func kernelHeapSafepoint() int64
 
+// kandeloWait32Step performs one host-bounded wait interval. A timeout may
+// identify an intermediate checkpoint, so callers retain their condition and
+// full timeout. The returned interval is spent only when result is timed out.
+// [RUNTIME-WORKAROUND: JSC-BLOCKED-WAIT-GC-STARVATION] All runtime waits
+// cooperate with the same host heap checkpoint, including before an M has a
+// syscall channel. This import allocates only in the host, not in Go's heap.
+//
+//go:nosplit
+func kandeloWait32Step(addr *uint32, expected uint32, timeout int64) (result uint32, interval int64) {
+	bound := int64(atomic.Load64(&kandeloHeapSafepointBound))
+	interval = timeout
+	if bound >= 0 && (interval < 0 || interval > bound) {
+		interval = bound
+	}
+	result = atomicWait32(addr, expected, interval)
+	if bound >= 0 && result == 2 {
+		atomic.Store64(&kandeloHeapSafepointBound, uint64(kernelHeapSafepoint()))
+	}
+	return
+}
+
 // doSyscall marshals a syscall into this M's channel region, runs the atomic
 // handshake, and returns the kernel's (return value, errno).
 //
@@ -300,10 +321,15 @@ func newosprocKandelo(mp *m) {
 	flags := uint32(_CLONE_VM | _CLONE_FS | _CLONE_FILES | _CLONE_SIGHAND | _CLONE_THREAD | _CLONE_SYSVSEM)
 	ret := kernel_clone(pcF, uint32(cStackHi), flags, 0, 0, cThreadPointer, 0)
 	if ret >= 0 {
+		remaining := int64(15_000_000_000)
 		for atomic.Load(&kandeloThreadHandoffAck) == 0 {
-			if atomicWait32(&kandeloThreadHandoffAck, 0, 15_000_000_000) == 2 {
-				unlock(&kandeloCloneLock)
-				throw("newosproc: child bootstrap timed out")
+			result, interval := kandeloWait32Step(&kandeloThreadHandoffAck, 0, remaining)
+			if result == 2 {
+				remaining -= interval
+				if remaining <= 0 && atomic.Load(&kandeloThreadHandoffAck) == 0 {
+					unlock(&kandeloCloneLock)
+					throw("newosproc: child bootstrap timed out")
+				}
 			}
 		}
 	}
@@ -352,12 +378,8 @@ func doSyscall6Raw(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno
 	// immediately if the value already differs, 0 when notified; a relaxed
 	// re-read guards against spurious wakeups (single-threaded guest, so a
 	// plain load observes the kernel's completed atomic store).
-	bound := int64(atomic.Load64(&kandeloHeapSafepointBound))
 	for {
-		if atomicWait32(statusPtr, chPending, bound) == 2 {
-			bound = kernelHeapSafepoint()
-			atomic.Store64(&kandeloHeapSafepointBound, uint64(bound))
-		}
+		kandeloWait32Step(statusPtr, chPending, -1)
 		if *statusPtr != chPending {
 			break
 		}

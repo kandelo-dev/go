@@ -51,7 +51,14 @@ var kandeloSleepWord uint32
 
 //go:nosplit
 func usleep(usec uint32) {
-	atomicWait32(&kandeloSleepWord, 0, int64(usec)*1000)
+	remaining := int64(usec) * 1000
+	for {
+		result, interval := kandeloWait32Step(&kandeloSleepWord, 0, remaining)
+		if result != 2 || remaining <= interval {
+			return
+		}
+		remaining -= interval
+	}
 }
 
 // readRandom fills r with random bytes via the channel getrandom(2) syscall.
