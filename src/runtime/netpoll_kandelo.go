@@ -75,8 +75,15 @@ func netpollIsPollDescriptor(fd uintptr) bool {
 func netpollopen(fd uintptr, pd *pollDesc) int32 {
 	lock(&kandeloPollLock)
 	pd.user = 0
+	// os.File needs a registration error to restore blocking I/O for regular
+	// files. Remove the probe interest so idle HUPs cannot spin the lazy poller.
+	event := kandeloEpollEvent{data: uint64(taggedPointerPack(unsafe.Pointer(pd), pd.fdseq.Load()))}
+	errno := kandeloPollCtl(kandeloEpollAdd, fd, &event)
+	if errno == 0 {
+		errno = kandeloPollCtl(kandeloEpollDel, fd, nil)
+	}
 	unlock(&kandeloPollLock)
-	return 0
+	return errno
 }
 
 func netpollclose(fd uintptr) int32 {
