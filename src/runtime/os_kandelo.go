@@ -168,14 +168,15 @@ func walltime1() (sec int64, nsec int32) {
 // always taken and dead-code-eliminate main.main. A real monotonic clock is
 // nonzero and non-decreasing, which the runtime scheduler/GC/timers require.
 // Scheduler state transitions can read the clock with stack growth disabled.
-// Keep this path nosplit and defer signal dispatch to an ordinary syscall:
-// callbacks cannot run while casgstatus is waiting for a GC scan to finish.
+// Keep this path nosplit, but preserve the channel's signal checkpoint.
+// A clock-polling M may own a pending signal without making other syscalls;
+// kandeloDeliverSignals already queues Go notifications on the system stack.
 //
 //go:nosplit
 func nanotime1() int64 {
 	timespec := &getg().m.clockTimespec
-	_, errno := doSyscall6Raw(sysClockGettime, kandeloClockMonotonic,
-		int64(uintptr(unsafe.Pointer(&timespec[0]))), 0, 0, 0, 0)
+	_, errno := doSyscall(sysClockGettime, kandeloClockMonotonic,
+		int64(uintptr(unsafe.Pointer(&timespec[0]))), 0)
 	if errno != 0 {
 		return 0
 	}
