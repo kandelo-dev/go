@@ -59,7 +59,7 @@ func statUnix(fi fs.FileInfo, h *Header, doNameLookups bool) error {
 			major = uint32((dev & 0x3fffffff00000000) >> 32)
 			minor = uint32((dev & 0x00000000ffffffff) >> 0)
 			h.Devmajor, h.Devminor = int64(major), int64(minor)
-		case "linux":
+		case "linux", "kandelo":
 			// Copied from golang.org/x/sys/unix/dev_linux.go.
 			major := uint32((dev & 0x00000000000fff00) >> 8)
 			major |= uint32((dev & 0xfffff00000000000) >> 32)

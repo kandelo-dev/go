@@ -2218,6 +2218,26 @@ func (p *Package) gccDebug(stdin []byte, nnames int) (d *dwarf.Data, ints []int6
 		buildStrings()
 		return d, ints, floats, strs
 	}
+	if goarch == "wasm32" {
+		linkedObject := ofile + ".wasm"
+		command := exec.Command("wasm-ld", "--no-entry", "--export-all", "--allow-undefined", ofile, "-o", linkedObject)
+		if output, err := command.CombinedOutput(); err != nil {
+			fatalf("cannot link Wasm debug object %s: %v\n%s", ofile, err, output)
+		}
+		module, err := readWasmDebugModule(linkedObject)
+		if err != nil {
+			fatalf("cannot read Wasm debug output %s: %v", ofile, err)
+		}
+		d, err := module.dwarf()
+		if err != nil {
+			fatalf("cannot load Wasm DWARF output from %s: %v", ofile, err)
+		}
+		ints, floats, strs, err := module.constants(nnames)
+		if err != nil {
+			fatalf("cannot load Wasm constants from %s: %v", ofile, err)
+		}
+		return d, ints, floats, strs
+	}
 	fatalf("cannot parse gcc output %s as ELF, Mach-O, PE, XCOFF object", ofile)
 	panic("not reached")
 }

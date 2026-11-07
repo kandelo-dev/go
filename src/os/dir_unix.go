@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build aix || dragonfly || freebsd || (js && wasm) || wasip1 || linux || netbsd || openbsd || solaris
+//go:build aix || dragonfly || freebsd || (js && wasm) || wasip1 || linux || netbsd || openbsd || solaris || kandelo
 
 package os
 
@@ -113,7 +113,7 @@ func (f *File) readdir(n int, mode readdirMode) (names []string, dirents []DirEn
 		// of inodes. Therefore, we cannot make the assumption that it is safe
 		// to skip entries with zero inodes.
 		// Some Linux filesystems (old XFS, FUSE) can return valid files with zero inodes.
-		if ino == 0 && runtime.GOOS != "linux" && runtime.GOOS != "wasip1" {
+		if ino == 0 && runtime.GOOS != "linux" && runtime.GOOS != "wasip1" && runtime.GOOS != "kandelo" {
 			continue
 		}
 		const namoff = uint64(unsafe.Offsetof(syscall.Dirent{}.Name))

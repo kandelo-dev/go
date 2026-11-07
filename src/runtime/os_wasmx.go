@@ -7,7 +7,6 @@
 package runtime
 
 import (
-	"internal/goarch"
 	"internal/runtime/atomic"
 	"unsafe"
 )
@@ -15,19 +14,13 @@ import (
 func osinit() {
 	// https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
 	physPageSize = 64 * 1024
-	if goarch.IsWasm32 != 0 && firstmoduledata.end > ^uintptr(0)-(physPageSize-1) {
-		throw("initial WebAssembly memory exceeds uintptr range")
-	}
-	initBloc()
-	pages := currentMemory()
-	if pages < 0 {
-		throw("negative WebAssembly memory size")
-	}
-	if goarch.IsWasm32 != 0 && uintptr(pages) > ^uintptr(0)/physPageSize {
-		// Only account for memory whose exclusive end fits in uintptr.
-		pages = int32(^uintptr(0) / physPageSize)
-	}
-	blocMax = uintptr(pages) * physPageSize // record the initial linear memory size
+	initWasmMemory()
+	// Capture the main M's syscall-channel base from the location the host
+	// wrote it (the kandeloChannelBase word at the __tls_base address) into
+	// this M's own mOS.channelBase, so doSyscall reads a per-M base. No-op on
+	// js/wasip1. See kandeloInitChannelBase in channel_kandelo.go.
+	kandeloInitChannelBase()
+	kandeloIgnoreSigpipe()
 	numCPUStartup = getCPUCount()
 	getg().m.procid = 2
 }
@@ -53,7 +46,22 @@ func sigpanic() {
 // FIXME: wasm doesn't have atomic yet
 func exitThread(wait *atomic.Uint32)
 
-type mOS struct{}
+type mOS struct {
+	// channelBase is this M's base address of the Kandelo syscall channel
+	// region in linear memory. Each M (its own WebAssembly.Instance over the
+	// shared memory) gets its own channel, so the base must be per-M rather
+	// than a single package word. The main M captures it in osinit; a future
+	// thread M captures it in its entry trampoline (see channel_kandelo.go,
+	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
+	channelBase             uintptr
+	cgoChannelBase          uint32
+	callbackCurgStackOffset uintptr
+	callbackCurgPC          uintptr
+	callbackG0SP            uintptr
+	foreignCStackActive     uintptr
+	clockTimespec           [2]int64
+	signalDeliveryActive    bool
+}
 
 func osyield()
 
@@ -108,8 +116,6 @@ func mdestroy(mp *m) {
 }
 
 // wasm has no signals
-const _NSIG = 0
-
 func signame(sig uint32) string {
 	return ""
 }
@@ -118,20 +124,30 @@ func crash() {
 	abort()
 }
 
-func initsig(preinit bool) {
-}
-
 // May run with m.p==nil, so write barriers are not allowed.
 //
 //go:nowritebarrier
 func newosproc(mp *m) {
+	// GOOS=kandelo spawns a second M as a new WebAssembly.Instance via
+	// kernel_clone (see newosprocKandelo in channel_kandelo.go). GOOS is a
+	// compile-time constant, so this branch is dead-code-eliminated on
+	// js/wasip1, where newosprocKandelo is the throwing stub.
+	if GOOS == "kandelo" {
+		newosprocKandelo(mp)
+		return
+	}
 	throw("newosproc: not implemented")
 }
 
 // Do nothing on WASM platform, always return EPIPE to caller.
 //
 //go:linkname os_sigpipe os.sigpipe
-func os_sigpipe() {}
+func os_sigpipe() {
+	if GOOS == "kandelo" && (signal_ignored(13) || sigsend(13)) {
+		return
+	}
+	kandeloStdoutSigpipe()
+}
 
 //go:linkname syscall_now syscall.now
 func syscall_now() (sec int64, nsec int32) {
@@ -164,9 +180,6 @@ func getfp() uintptr { return 0 }
 
 func setProcessCPUProfiler(hz int32) {}
 func setThreadCPUProfiler(hz int32)  {}
-func sigdisable(uint32)              {}
-func sigenable(uint32)               {}
-func sigignore(uint32)               {}
 
 // Stubs so tests can link correctly. These should never be called.
 func open(name *byte, mode, perm int32) int32        { panic("not implemented") }

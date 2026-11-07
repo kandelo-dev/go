@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build unix || (js && wasm) || wasip1
+//go:build unix || (js && wasm) || wasip1 || kandelo
 
 package syscall
 
@@ -74,7 +74,7 @@ func ParseDirent(buf []byte, max int, names []string) (consumed int, count int, 
 		}
 		// See src/os/dir_unix.go for the reason why this condition is
 		// excluded on wasip1 and linux.
-		if ino == 0 && runtime.GOOS != "linux" && runtime.GOOS != "wasip1" { // File absent in directory.
+		if ino == 0 && runtime.GOOS != "linux" && runtime.GOOS != "wasip1" && runtime.GOOS != "kandelo" { // File absent in directory.
 			continue
 		}
 		const namoff = uint64(unsafe.Offsetof(Dirent{}.Name))

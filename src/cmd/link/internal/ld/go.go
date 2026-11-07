@@ -433,6 +433,12 @@ func (ctxt *Link) addexport() {
 	if ctxt.HeadType == objabi.Hdarwin || ctxt.HeadType == objabi.Haix {
 		return
 	}
+	if ctxt.HeadType == objabi.Hkandelo && ctxt.LinkMode == LinkInternal {
+		if len(dynlib) != 0 {
+			Errorf("GOOS=kandelo: dynamic libraries are not supported by internal Wasm linking")
+		}
+		return
+	}
 
 	// Add dynamic symbols.
 	for _, s := range ctxt.dynexp {

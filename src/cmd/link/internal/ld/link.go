@@ -34,6 +34,7 @@ import (
 	"bufio"
 	"cmd/internal/objabi"
 	"cmd/link/internal/loader"
+	"cmd/link/internal/loadwasm"
 	"cmd/link/internal/sym"
 	"debug/elf"
 	"fmt"
@@ -90,12 +91,24 @@ type Link struct {
 
 	compressDWARF bool
 
-	Libdir       []string
-	Library      []*sym.Library
-	LibraryByPkg map[string]*sym.Library
-	Shlibs       []Shlib
-	Textp        []loader.Sym
-	Moduledata   loader.Sym
+	Libdir              []string
+	Library             []*sym.Library
+	LibraryByPkg        map[string]*sym.Library
+	Shlibs              []Shlib
+	Textp               []loader.Sym
+	WasmHostFunctions   map[loader.Sym]WasmHostFunction
+	WasmWeakFunctions   map[loader.Sym]bool
+	WasmDataSymbols     map[string]loader.Sym
+	WasmCExports        []string
+	WasmWeakDataSymbols map[loader.Sym]bool
+	WasmTLSSymbols      map[string]uint32
+	WasmTLSTemplate     []byte
+	WasmTLSTemplateSym  loader.Sym
+	WasmTLSMainSym      loader.Sym
+	WasmTLSAlign        uint32
+	WasmDataTableRelocs []WasmDataTableReloc
+	WasmInitFunctions   []WasmInitFunction
+	Moduledata          loader.Sym
 
 	moduledataTypeDescOffset int64
 	moduledataItabOffset     int64
@@ -124,6 +137,20 @@ type Link struct {
 	// you can create a symbol, and just a generation function will be called
 	// after the symbol's been created in the output mmap.
 	generatorSyms map[loader.Sym]generatorFunc
+}
+
+type WasmHostFunction struct {
+	Object      *loadwasm.Object
+	Function    loadwasm.Function
+	DataSymbols map[string]loader.Sym
+	TLSSymbols  map[string]uint32
+}
+
+type WasmDataTableReloc struct {
+	Segment loader.Sym
+	Offset  uint32
+	Target  loader.Sym
+	Addend  int32
 }
 
 type cgodata struct {

@@ -5,7 +5,11 @@
 #include "libcgo.h"
 
 #ifndef CGO_TSAN
+#if defined(__wasm__)
+const uint64_t _cgo_yield = 0;
+#else
 void(* const _cgo_yield)() = NULL;
+#endif
 #else
 
 #include <string.h>

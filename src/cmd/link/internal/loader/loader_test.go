@@ -463,3 +463,17 @@ func TestOuterSub(t *testing.T) {
 		t.Errorf("expected %d in sub list got %d", 5, count)
 	}
 }
+
+func TestMoveInteriorSym(t *testing.T) {
+	loader := mkLoader()
+	first := loader.LookupOrCreateSym("first", 0)
+	second := loader.LookupOrCreateSym("second", 0)
+	moved := loader.LookupOrCreateSym("moved", 0)
+	remaining := loader.LookupOrCreateSym("remaining", 0)
+	loader.AddInteriorSym(first, remaining)
+	loader.AddInteriorSym(first, moved)
+	loader.MoveInteriorSym(second, moved)
+	if loader.OuterSym(moved) != second || loader.SubSym(first) != remaining || loader.SubSym(second) != moved || loader.SubSym(moved) != 0 {
+		t.Fatalf("unexpected interior move: first=%d second=%d moved outer=%d moved next=%d", loader.SubSym(first), loader.SubSym(second), loader.OuterSym(moved), loader.SubSym(moved))
+	}
+}

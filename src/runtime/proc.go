@@ -229,7 +229,7 @@ func main() {
 			throw("_cgo_pthread_key_created missing")
 		}
 
-		if GOOS != "windows" {
+		if GOOS != "windows" && GOOS != "kandelo" {
 			if _cgo_thread_start == nil {
 				throw("_cgo_thread_start missing")
 			}
@@ -2288,7 +2288,7 @@ type cgothreadstart struct {
 // isn't because it borrows pp.
 //
 //go:yeswritebarrierrec
-func allocm(pp *p, fn func(), id int64) *m {
+func allocm(pp *p, fn func(), id int64, extra bool) *m {
 	allocmLock.rlock()
 
 	// The caller owns pp, but we may borrow (i.e., acquirep) it. We must
@@ -2330,6 +2330,9 @@ func allocm(pp *p, fn func(), id int64) *m {
 				// reachable off the system stack transitively from
 				// startm.
 				systemstack(func() {
+					if GOOS == "kandelo" && freem.cgoThread != nil {
+						stackfree(freem.cgoThread.stack)
+					}
 					stackfree(freem.g0.stack)
 					if valgrindenabled {
 						valgrindDeregisterStack(freem.g0.valgrindStackID)
@@ -2349,12 +2352,18 @@ func allocm(pp *p, fn func(), id int64) *m {
 
 	// In case of cgo or Solaris or illumos or Darwin, pthread_create will make us a stack.
 	// Windows and Plan 9 will layout sched stack on OS stack.
-	if iscgo || mStackIsSystemAllocated() {
+	if (iscgo && GOOS != "kandelo") || mStackIsSystemAllocated() {
 		mp.g0 = malg(-1)
 	} else {
 		mp.g0 = malg(16384 * sys.StackGuardMultiplier)
 	}
 	mp.g0.m = mp
+	if iscgo && GOOS == "kandelo" && !extra {
+		mp.cgoThread = new(cgoThreadState)
+		systemstack(func() {
+			mp.cgoThread.stack = stackalloc(8 << 20)
+		})
+	}
 
 	if pp == gp.m.p.ptr() {
 		releasep()
@@ -2526,7 +2535,7 @@ func oneNewExtraM() {
 	// The sched.pc will never be returned to, but setting it to
 	// goexit makes clear to the traceback routines where
 	// the goroutine stack ends.
-	mp := allocm(nil, nil, -1)
+	mp := allocm(nil, nil, -1, true)
 	gp := malg(4096)
 	gp.sched.pc = abi.FuncPCABI0(goexit) + sys.PCQuantum
 	gp.sched.sp = gp.stack.hi
@@ -2885,10 +2894,10 @@ func newm(fn func(), pp *p, id int64) {
 	// start.
 	acquirem()
 
-	mp := allocm(pp, fn, id)
+	mp := allocm(pp, fn, id, false)
 	mp.nextp.set(pp)
 	mp.sigmask = initSigmask
-	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" {
+	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" && GOOS != "kandelo" {
 		// We're on a locked M or a thread that may have been
 		// started by C. The kernel state of this thread may
 		// be strange (the user may have locked it for that
@@ -2922,7 +2931,7 @@ func newm(fn func(), pp *p, id int64) {
 }
 
 func newm1(mp *m) {
-	if iscgo && _cgo_thread_start != nil {
+	if iscgo && _cgo_thread_start != nil && GOOS != "kandelo" {
 		var ts cgothreadstart
 		ts.g.set(mp.g0)
 		ts.tls = (*uint64)(unsafe.Pointer(&mp.tls[0]))
@@ -4565,7 +4574,7 @@ func gdestroy(gp *g) {
 
 	dropg()
 
-	if GOARCH == "wasm" || GOARCH == "wasm32" { // no threads yet on wasm
+	if (GOARCH == "wasm" || GOARCH == "wasm32") && GOOS != "kandelo" {
 		gfput(pp, gp)
 		return
 	}
@@ -5658,8 +5667,8 @@ func Breakpoint() {
 //
 //go:nosplit
 func dolockOSThread() {
-	if GOARCH == "wasm" || GOARCH == "wasm32" {
-		return // no threads on wasm yet
+	if (GOARCH == "wasm" || GOARCH == "wasm32") && GOOS != "kandelo" {
+		return // no threads on WASI or js
 	}
 	gp := getg()
 	gp.m.lockedg.set(gp)
@@ -5683,7 +5692,7 @@ func dolockOSThread() {
 //
 //go:nosplit
 func LockOSThread() {
-	if atomic.Load(&newmHandoff.haveTemplateThread) == 0 && GOOS != "plan9" {
+	if atomic.Load(&newmHandoff.haveTemplateThread) == 0 && GOOS != "plan9" && GOOS != "kandelo" {
 		// If we need to start a new thread from the locked
 		// thread, we need the template thread. Start it now
 		// while we're in a known-good state.
@@ -5710,8 +5719,8 @@ func lockOSThread() {
 //
 //go:nosplit
 func dounlockOSThread() {
-	if GOARCH == "wasm" || GOARCH == "wasm32" {
-		return // no threads on wasm yet
+	if (GOARCH == "wasm" || GOARCH == "wasm32") && GOOS != "kandelo" {
+		return // no threads on WASI or js
 	}
 	gp := getg()
 	if gp.m.lockedInt != 0 || gp.m.lockedExt != 0 {
@@ -6545,8 +6554,8 @@ var forcegcperiod int64 = 2 * 60 * 1e9
 
 // haveSysmon indicates whether there is sysmon thread support.
 //
-// No threads on wasm yet, so no sysmon.
-const haveSysmon = GOARCH != "wasm" && GOARCH != "wasm32"
+// Kandelo supports threads; the upstream Wasm hosts do not.
+const haveSysmon = (GOARCH != "wasm" && GOARCH != "wasm32") || GOOS == "kandelo"
 
 // Always runs without a P, so write barriers are not allowed.
 //

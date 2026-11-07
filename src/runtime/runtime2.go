@@ -690,6 +690,7 @@ type m struct {
 
 	syscalltick uint32
 	freelink    *m // on sched.freem
+	cgoThread   *cgoThreadState
 	trace       mTraceState
 
 	// These are here to avoid using the G stack so the stack can move during the call.
@@ -726,6 +727,11 @@ type m struct {
 
 	// self points this M until mexit clears it to return nil.
 	self mWeakPointer
+}
+
+type cgoThreadState struct {
+	stack stack
+	tp    [64]uint32
 }
 
 const mRedZoneSize = (16 << 3) * asanenabledBit // redZoneSize(2048)

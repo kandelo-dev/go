@@ -624,6 +624,10 @@ func (ctxt *Link) loadlib() {
 	// Conditionally load host objects, or setup for external linking.
 	hostobjs(ctxt)
 	hostlinksetup(ctxt)
+	if ctxt.HeadType == objabi.Hkandelo && ctxt.LinkMode == LinkInternal && iscgo {
+		loadKandeloExecutableGlue(ctxt)
+		loadKandeloCgoArchives(ctxt)
+	}
 
 	if ctxt.LinkMode == LinkInternal && len(hostobj) != 0 {
 		// If we have any undefined symbols in external
@@ -640,7 +644,15 @@ func (ctxt *Link) loadlib() {
 		}
 		if any {
 			if *flagLibGCC == "" {
-				*flagLibGCC = ctxt.findLibPathCmd("--print-libgcc-file-name", "libgcc")
+				if ctxt.HeadType == objabi.Hkandelo {
+					*flagLibGCC = ctxt.findLibPath("libc.a")
+					if !filepath.IsAbs(*flagLibGCC) {
+						Errorf("GOOS=kandelo: SDK compiler did not report an absolute libc.a path")
+						*flagLibGCC = "none"
+					}
+				} else {
+					*flagLibGCC = ctxt.findLibPathCmd("--print-libgcc-file-name", "libgcc")
+				}
 			}
 			if runtime.GOOS == "freebsd" && strings.HasPrefix(filepath.Base(*flagLibGCC), "libclang_rt.builtins") {
 				// On newer versions of FreeBSD, libgcc is returned as something like
@@ -1206,8 +1218,8 @@ var internalpkg = []string{
 	"runtime/asan",
 }
 
-func ldhostobj(ld func(*Link, *bio.Reader, string, int64, string), headType objabi.HeadType, f *bio.Reader, pkg string, length int64, pn string, file string) *Hostobj {
-	isinternal := false
+func ldhostobj(ld func(*Link, *bio.Reader, string, int64, string), headType objabi.HeadType, f *bio.Reader, pkg string, length int64, pn string, file string, internal bool) *Hostobj {
+	isinternal := internal
 	for _, intpkg := range internalpkg {
 		if pkg == intpkg {
 			isinternal = true
@@ -1264,6 +1276,102 @@ func hostobjs(ctxt *Link) {
 			captureHostObj(h)
 		}
 		f.Close()
+	}
+}
+
+func loadKandeloExecutableGlue(ctxt *Link) {
+	dir, err := os.MkdirTemp("", "go-kandelo-glue-")
+	if err != nil {
+		Exitf("GOOS=kandelo: create glue directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	extld := ctxt.extld()
+	glue := []string{"channel_syscall", "compiler_rt", "cxxrt"}
+	if kandeloLinksDlopen() {
+		glue = append(glue, "dlopen")
+	}
+	for _, name := range glue {
+		source := ctxt.findLibPath(name + ".c")
+		if !filepath.IsAbs(source) {
+			Exitf("GOOS=kandelo: SDK compiler did not report an absolute %s.c path", name)
+		}
+		object := filepath.Join(dir, name+".o")
+		args := append(append([]string{}, extld[1:]...), "-O2", "-fPIC", "-c", source, "-o", object)
+		out, err := exec.Command(extld[0], args...).CombinedOutput()
+		if err != nil {
+			Exitf("GOOS=kandelo: compile %s glue: %v\n%s", name, err, out)
+		}
+		hostObject(ctxt, "kandelo/"+name, object)
+	}
+}
+
+func kandeloLinksDlopen() bool {
+	flags := append(append([]string(nil), ldflag...), flagExtldflags...)
+	for index, flag := range flags {
+		if flag == "-ldl" || flag == "-l" && index+1 < len(flags) && flags[index+1] == "dl" {
+			return true
+		}
+	}
+	return false
+}
+
+func loadKandeloCgoArchives(ctxt *Link) {
+	var searchPaths []string
+	var libraries []string
+	linkerFlags := append(append([]string(nil), ldflag...), flagExtldflags...)
+	for index := 0; index < len(linkerFlags); index++ {
+		flag := linkerFlags[index]
+		switch {
+		case strings.HasPrefix(flag, "-Wl,--export-dynamic-symbol="):
+			name := strings.TrimPrefix(flag, "-Wl,--export-dynamic-symbol=")
+			if name == "" {
+				Errorf("GOOS=kandelo: empty C export name")
+				continue
+			}
+			ctxt.WasmCExports = append(ctxt.WasmCExports, name)
+		case flag == "-L" && index+1 < len(linkerFlags):
+			index++
+			searchPaths = append(searchPaths, linkerFlags[index])
+		case strings.HasPrefix(flag, "-L") && len(flag) > 2:
+			searchPaths = append(searchPaths, flag[2:])
+		case flag == "-l" && index+1 < len(linkerFlags):
+			index++
+			if linkerFlags[index] != "dl" {
+				libraries = append(libraries, linkerFlags[index])
+			}
+		case strings.HasPrefix(flag, "-l") && len(flag) > 2:
+			if flag != "-ldl" {
+				libraries = append(libraries, flag[2:])
+			}
+		case strings.HasSuffix(flag, ".a") && filepath.IsAbs(flag):
+			libraries = append(libraries, flag)
+		}
+	}
+	loaded := make(map[string]bool)
+	for _, library := range libraries {
+		path := library
+		if !filepath.IsAbs(path) {
+			name := "lib" + library + ".a"
+			for _, directory := range searchPaths {
+				candidate := filepath.Join(directory, name)
+				if _, err := os.Stat(candidate); err == nil {
+					path = candidate
+					break
+				}
+			}
+			if path == library {
+				path = ctxt.findLibPath(name)
+			}
+		}
+		if !filepath.IsAbs(path) {
+			Errorf("GOOS=kandelo: C archive %q not found", library)
+			continue
+		}
+		if loaded[path] {
+			continue
+		}
+		loaded[path] = true
+		hostArchive(ctxt, path)
 	}
 }
 
@@ -2469,6 +2577,9 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 	lib.Units = append(lib.Units, unit)
 
 	magic := uint32(c1)<<24 | uint32(c2)<<16 | uint32(c3)<<8 | uint32(c4)
+	if magic == 0x0061736d && ctxt.HeadType == objabi.Hkandelo {
+		return ldhostobj(loadwasmobj, ctxt.HeadType, f, pkg, length, pn, file, true)
+	}
 	if magic == 0x7f454c46 { // \x7F E L F
 		ldelf := func(ctxt *Link, f *bio.Reader, pkg string, length int64, pn string) {
 			textp, flags, err := loadelf.Load(ctxt.loader, ctxt.Arch, ctxt.IncVersion(), f, pkg, length, pn, ehdr.Flags)
@@ -2479,7 +2590,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			ehdr.Flags = flags
 			ctxt.Textp = append(ctxt.Textp, textp...)
 		}
-		return ldhostobj(ldelf, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldelf, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	if magic&^1 == 0xfeedface || magic&^0x01000000 == 0xcefaedfe {
@@ -2491,7 +2602,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			}
 			ctxt.Textp = append(ctxt.Textp, textp...)
 		}
-		return ldhostobj(ldmacho, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldmacho, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	switch c1<<8 | c2 {
@@ -2514,7 +2625,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			}
 			ctxt.Textp = append(ctxt.Textp, ls.Textp...)
 		}
-		return ldhostobj(ldpe, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldpe, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	if c1 == 0x01 && (c2 == 0xD7 || c2 == 0xF7) {
@@ -2526,7 +2637,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 			}
 			ctxt.Textp = append(ctxt.Textp, textp...)
 		}
-		return ldhostobj(ldxcoff, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(ldxcoff, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	if c1 != 'g' || c2 != 'o' || c3 != ' ' || c4 != 'o' {
@@ -2534,7 +2645,7 @@ func ldobj(ctxt *Link, f *bio.Reader, lib *sym.Library, length int64, pn string,
 		// If we try to read symbols from this object, we will
 		// report an error at that time.
 		unknownObjFormat = true
-		return ldhostobj(nil, ctxt.HeadType, f, pkg, length, pn, file)
+		return ldhostobj(nil, ctxt.HeadType, f, pkg, length, pn, file, false)
 	}
 
 	/* check the header */

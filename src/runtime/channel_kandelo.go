@@ -1,0 +1,399 @@
+// Copyright 2025 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build kandelo
+
+package runtime
+
+import (
+	"internal/abi"
+	"internal/runtime/atomic"
+	"unsafe"
+)
+
+// This file implements the Kandelo guest side of the syscall channel: how the
+// runtime learns where the channel region lives in linear memory, and the
+// atomic handshake that submits a syscall and blocks until the kernel replies.
+//
+// Channel base discovery (sub-problem B)
+// --------------------------------------
+// Go's wasm backend cannot import a mutable global, so the guest cannot use the
+// C glue's env.__channel_base import. Instead the linker synthesizes an
+// exported wasm global named __tls_base (see cmd/link/internal/wasm/asm.go)
+// whose constant value is the linear-memory address of kandeloChannelBase
+// below. At instantiation the Kandelo host reads that exported global and
+// stores the channel-region offset into linear memory at that address (see
+// setupChannelBase in host/src/worker-main.ts). We deliberately do NOT export
+// __get_channel_base_addr, so the host writes at exactly __tls_base + 0. The
+// runtime then reads the offset back from kandeloChannelBase.
+//
+// kandeloChannelBase is a package-level word so its address is a stable
+// link-time constant the linker can embed in the __tls_base global, and so the
+// symbol stays live. It is the host's write target and a transient handoff
+// slot, not the value syscalls read directly: at M init kandeloInitChannelBase
+// copies it into the per-M mOS.channelBase, and doSyscall6 reads that per-M
+// copy. kandeloStartHeapAboveChannel still reads this word to detect whether a
+// Kandelo host provisioned the channel at all.
+var kandeloChannelBase uint32
+
+const _NSIG = 65
+
+// Channel region layout, offsets relative to the channel base. Must match
+// crates/shared/src/lib.rs (mod channel) in the Kandelo repository.
+const (
+	chStatus    = 0     // u32, atomic
+	chNumber    = 4     // u32 syscall number
+	chArgs      = 8     // 6 * i64 arguments
+	chReturn    = 56    // i64 return value
+	chErrno     = 64    // i32 errno value
+	chFlags     = 68    // u32 request flags (always 0 for a plain syscall)
+	chSigSignum = 65552 // u32 pending signal / terminal retirement marker
+)
+
+// ChannelStatus values (crates/shared/src/lib.rs).
+const (
+	chIdle     uint32 = 0
+	chPending  uint32 = 1
+	chComplete uint32 = 2
+	chError    uint32 = 3
+)
+
+// Kandelo syscall numbers (the kernel's own numbering).
+const (
+	sysWrite        int32 = 4
+	sysClockGettime int32 = 40
+	sysSigaction    int32 = 36
+	sysRaise        int32 = 38
+	sysGetrandom    int32 = 120
+	sysExitGroup    int32 = 387
+)
+
+// Linux-compatible clock ids used by clock_gettime.
+const (
+	kandeloClockRealtime  int64 = 0
+	kandeloClockMonotonic int64 = 1
+)
+
+// Atomic helpers implemented in atomic_kandelo.s.
+func atomicStore32(addr *uint32, val uint32)
+func atomicNotify(addr *uint32, count uint32) uint32
+func atomicWait32(addr *uint32, expected uint32, timeout int64) uint32
+
+// [RUNTIME-WORKAROUND: JSC-BLOCKED-WAIT-GC-STARVATION] Match libc's
+// bounded wait and host allocation checkpoint. The suspected JSC collection
+// starvation is documented in Kandelo's runtime-workaround registry. The
+// host returns a negative bound on engines that do not need the checkpoint.
+var kandeloHeapSafepointBound uint64 = 100_000_000
+
+//go:wasmimport kernel kernel_heap_safepoint
+func kernelHeapSafepoint() int64
+
+// kandeloWait32Step performs one host-bounded wait interval. A timeout may
+// identify an intermediate checkpoint, so callers retain their condition and
+// full timeout. The returned interval is spent only when result is timed out.
+// [RUNTIME-WORKAROUND: JSC-BLOCKED-WAIT-GC-STARVATION] All runtime waits
+// cooperate with the same host heap checkpoint, including before an M has a
+// syscall channel. This import allocates only in the host, not in Go's heap.
+//
+//go:nosplit
+func kandeloWait32Step(addr *uint32, expected uint32, timeout int64) (result uint32, interval int64) {
+	bound := int64(atomic.Load64(&kandeloHeapSafepointBound))
+	interval = timeout
+	if bound >= 0 && (interval < 0 || interval > bound) {
+		interval = bound
+	}
+	result = atomicWait32(addr, expected, interval)
+	if bound >= 0 && result == 2 {
+		atomic.Store64(&kandeloHeapSafepointBound, uint64(kernelHeapSafepoint()))
+	}
+	return
+}
+
+// doSyscall marshals a syscall into this M's channel region, runs the atomic
+// handshake, and returns the kernel's (return value, errno).
+//
+// The returned errno is the kernel's errno_value slot; ret is meaningful only
+// when errno == 0.
+//
+//go:nosplit
+func doSyscall(number int32, a0, a1, a2 int64) (ret int64, errno int32) {
+	return doSyscall6(number, a0, a1, a2, 0, 0, 0)
+}
+
+// syscall_kandeloSyscall6 is the syscall package's entry into the channel
+// handshake. The syscall package declares a bodyless kandeloSyscall6 and this
+// linkname supplies the runtime implementation, mirroring how os_wasm.go
+// exposes syscall_now as syscall.now. The syscall package needs a low-level
+// primitive so os/internal-poll can perform read/write/open/close/etc. against
+// the kernel through the same channel the runtime already uses for write1.
+//
+//go:linkname syscall_kandeloSyscall6 syscall.kandeloSyscall6
+//go:nosplit
+func syscall_kandeloSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
+	if iscgo {
+		// libc owns C handler dispatch and SA_RESTART deadline accounting.
+		// Use its typed result so wasm32 long cannot truncate Go int64s.
+		call := struct {
+			arguments [7]int64
+			result    int64
+			errno     int32
+		}{arguments: [7]int64{int64(number), a0, a1, a2, a3, a4, a5}}
+		cgocall(_cgo_kandelo_syscall, unsafe.Pointer(&call))
+		return call.result, call.errno
+	}
+	entersyscallblock()
+	ret, errno = doSyscall6(number, a0, a1, a2, a3, a4, a5)
+	exitsyscall()
+	return ret, errno
+}
+
+//go:linkname _cgo_kandelo_syscall _cgo_kandelo_syscall
+var _cgo_kandelo_syscall unsafe.Pointer
+
+// kandeloInitChannelBase copies this M's syscall-channel base into its own
+// mOS.channelBase. Non-cgo builds use the serialized shared handoff word.
+// Cgo builds instead read C's per-instance mutable __channel_base global:
+// a C-created pthread can start concurrently with a Go M and overwrite the
+// shared handoff word before either thread reads it.
+//
+// The main M calls this from osinit. A thread M calls it from its entry
+// trampoline before performing any syscall. Foreign C threads call it after
+// attaching an extra Go M. The parent holds kandeloCloneLock across the
+// non-cgo shared-word handoff.
+//
+//go:nosplit
+func kandeloInitChannelBase() {
+	if iscgo {
+		getg().m.channelBase = uintptr(kandeloCgoChannelBase())
+	} else {
+		getg().m.channelBase = uintptr(kandeloChannelBase)
+	}
+}
+
+func kandeloIgnoreSigpipe() {
+	action := [16]byte{1}
+	_, errno := doSyscall6(sysSigaction, 13, int64(uintptr(unsafe.Pointer(&action[0]))), 0, 0, 0, 0)
+	if errno != 0 {
+		throw("cannot ignore SIGPIPE")
+	}
+}
+
+func kandeloStdoutSigpipe() {
+	action := [16]byte{}
+	_, errno := doSyscall6(sysSigaction, 13, int64(uintptr(unsafe.Pointer(&action[0]))), 0, 0, 0, 0)
+	if errno != 0 {
+		throw("cannot restore SIGPIPE")
+	}
+	_, errno = doSyscall6(sysRaise, 13, 0, 0, 0, 0, 0)
+	if errno != 0 {
+		throw("cannot raise SIGPIPE")
+	}
+}
+
+// Second-M spawn (kernel_clone) mechanism
+// ---------------------------------------
+// A Go M on Kandelo is a distinct WebAssembly.Instance sharing the process's
+// linear memory. Spawning one is a three-step handoff:
+//
+//  1. newosprocKandelo (parent M) writes the new M's g0 pointer and g0 stack
+//     top into the kandeloThreadHandoff* words, then calls kernel_clone with
+//     fnPtr = PC_F of wasmThreadTramp.
+//  2. The Kandelo host allocates a thread slot, instantiates a fresh instance
+//     over the shared memory, writes that slot's syscall-channel offset to the
+//     shared kandeloChannelBase word (host setupChannelBase), and calls
+//     table.get(fnPtr)() on the exported __indirect_function_table.
+//  3. That call lands in wasmThreadTramp on the new instance, whose g and SP
+//     wasm globals are ZERO. The trampoline (asm) installs g and SP from the
+//     handoff words, then calls kandeloThreadEntry.
+//
+// The handoff words are single shared slots. kandeloCloneLock serializes
+// concurrent spawns until the child acknowledges that it has consumed g0 and
+// stack top and captured its own channel base.
+
+// kandeloThreadHandoffG and kandeloThreadHandoffSP carry the new M's g0 pointer
+// and g0 stack top to wasmThreadTramp. They are uint64 so the asm trampoline can
+// load them with a single i64 load before any Go stack or g register exists.
+var (
+	kandeloThreadHandoffG   uint64
+	kandeloThreadHandoffSP  uint64
+	kandeloThreadHandoffAck uint32
+	kandeloCloneLock        mutex
+)
+
+// Linux thread-clone flags. The Kandelo kernel's sys_clone requires
+// CLONE_VM|CLONE_THREAD to treat the request as a thread rather than a process
+// (crates/runtime-core/src/syscalls.rs). The rest mirror musl's pthread_create
+// clone mask minus the TID/TLS flags: Go does not use C thread-local storage
+// and passes tls/ptid/ctid as 0, so CLONE_SETTLS/CLONE_*_SETTID must stay clear
+// to keep the kernel from dereferencing those null pointers.
+const (
+	_CLONE_VM      = 0x00000100
+	_CLONE_FS      = 0x00000200
+	_CLONE_FILES   = 0x00000400
+	_CLONE_SIGHAND = 0x00000800
+	_CLONE_THREAD  = 0x00010000
+	_CLONE_SYSVSEM = 0x00040000
+)
+
+// kernel_clone spawns a new thread instance. It mirrors the host import used by
+// musl's __clone (libc/musl/src/thread/wasm64posix/clone.c) and the Kandelo host
+// kernel_clone (host/src/worker-main.ts): the host records fnPtr in the channel
+// data area and, after the SYS_CLONE channel transaction returns the new tid,
+// instantiates the thread and calls table.get(fnPtr)(). Returns the child tid,
+// or a negative errno.
+//
+//go:wasmimport kernel kernel_clone
+func kernel_clone(fnPtr, stackPtr, flags, arg, ptid, tls, ctid uint32) int32
+
+// wasmThreadTramp is the fresh-instance thread entry, implemented in
+// atomic_kandelo.s. On entry the g and SP wasm globals are zero; it installs
+// them from the handoff words before running any Go code, then calls
+// kandeloThreadEntry. newosprocKandelo takes its PC_F via abi.FuncPCABI0.
+func wasmThreadTramp()
+func kandeloStopWasmLoop()
+
+// kandeloThreadEntry runs on the new M once wasmThreadTramp has installed g and
+// SP. It captures its channel, acknowledges the handoff, and enters the Go
+// scheduler for an M that owns a P. The no-P path is retained for the explicit
+// clone-mechanics probe.
+//
+//go:nosplit
+func kandeloThreadEntry() {
+	kandeloInitChannelBase()
+	if iscgo {
+		cgoKandeloThreadInit(unsafe.Pointer(&getg().m.cgoThread.tp[0]))
+	}
+	atomic.Store(&kandeloThreadHandoffAck, 1)
+	atomicNotify(&kandeloThreadHandoffAck, 1)
+	if getg().m.nextp == 0 && getg().m.mstartfn == nil {
+		const msg = "M2 alive via kernel_clone\n"
+		write1(2, unsafe.Pointer(unsafe.StringData(msg)), int32(len(msg)))
+		kandeloStopWasmLoop()
+		return
+	}
+	mstart()
+}
+
+// kandeloSpawnProbeM triggers exactly one second-M spawn, independent of the
+// scheduler's Gomaxprocs heuristics, so the clone + instance-bootstrap +
+// per-M-channel mechanics can be exercised deterministically for this milestone.
+// newm allocates a fresh m with its own g0 stack and calls newosproc, which
+// clones a new WebAssembly.Instance and runs wasmThreadTramp on it. Exposed via
+// linkname so a mechanics-proof test program can request the clone directly.
+//
+//go:linkname kandeloSpawnProbeM
+func kandeloSpawnProbeM() {
+	newm(nil, nil, -1)
+}
+
+//go:linkname kandeloThreadLockState
+func kandeloThreadLockState() bool {
+	gp := getg()
+	return gp.lockedm.ptr() == gp.m && gp.m.lockedg.ptr() == gp
+}
+
+// newosprocKandelo launches a second M via kernel_clone. mp already has an
+// allocated g0 with a stack (allocm/newm). May run with m.p==nil; must not use
+// write barriers.
+//
+//go:nowritebarrier
+func newosprocKandelo(mp *m) {
+	g0 := mp.g0
+	// The clone entry is a Wasm table handle, not its logical Go PC.
+	pcF := uint32(funcHandle(abi.FuncPCABI0(wasmThreadTramp)))
+	stackHi := uint64(g0.stack.hi)
+	cStackHi := g0.stack.hi
+	var cThreadPointer uint32
+	if iscgo {
+		cStackHi = mp.cgoThread.stack.hi
+		cThreadPointer = uint32(uintptr(unsafe.Pointer(&mp.cgoThread.tp[0])))
+	}
+
+	lock(&kandeloCloneLock)
+	kandeloThreadHandoffG = uint64(uintptr(unsafe.Pointer(g0)))
+	kandeloThreadHandoffSP = stackHi
+	atomic.Store(&kandeloThreadHandoffAck, 0)
+	flags := uint32(_CLONE_VM | _CLONE_FS | _CLONE_FILES | _CLONE_SIGHAND | _CLONE_THREAD | _CLONE_SYSVSEM)
+	ret := kernel_clone(pcF, uint32(cStackHi), flags, 0, 0, cThreadPointer, 0)
+	if ret >= 0 {
+		remaining := int64(15_000_000_000)
+		for atomic.Load(&kandeloThreadHandoffAck) == 0 {
+			result, interval := kandeloWait32Step(&kandeloThreadHandoffAck, 0, remaining)
+			if result == 2 {
+				remaining -= interval
+				if remaining <= 0 && atomic.Load(&kandeloThreadHandoffAck) == 0 {
+					unlock(&kandeloCloneLock)
+					throw("newosproc: child bootstrap timed out")
+				}
+			}
+		}
+	}
+	unlock(&kandeloCloneLock)
+
+	if ret < 0 {
+		throw("newosproc: kernel_clone failed")
+	}
+}
+
+//go:nosplit
+func doSyscall6(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
+	ret, errno = doSyscall6Raw(number, a0, a1, a2, a3, a4, a5)
+	kandeloDeliverSignals()
+	return ret, errno
+}
+
+// Signal return/mask restoration must not recursively consume a new delivery.
+// The outer delivery loop handles any signal exposed by restoring the mask.
+//
+//go:nosplit
+func doSyscall6Raw(number int32, a0, a1, a2, a3, a4, a5 int64) (ret int64, errno int32) {
+	base := getg().m.channelBase
+	if base == 0 {
+		// The host has not provisioned the channel base. Fail honestly rather
+		// than scribble on low linear memory; 38 is Linux ENOSYS.
+		return 0, 38
+	}
+
+	*(*uint32)(unsafe.Pointer(base + chNumber)) = uint32(number)
+	*(*int64)(unsafe.Pointer(base + chArgs + 0*8)) = a0
+	*(*int64)(unsafe.Pointer(base + chArgs + 1*8)) = a1
+	*(*int64)(unsafe.Pointer(base + chArgs + 2*8)) = a2
+	*(*int64)(unsafe.Pointer(base + chArgs + 3*8)) = a3
+	*(*int64)(unsafe.Pointer(base + chArgs + 4*8)) = a4
+	*(*int64)(unsafe.Pointer(base + chArgs + 5*8)) = a5
+	*(*uint32)(unsafe.Pointer(base + chFlags)) = 0
+
+	statusPtr := (*uint32)(unsafe.Pointer(base + chStatus))
+
+	// Publish the request: atomic store PENDING, then wake the kernel.
+	atomicStore32(statusPtr, chPending)
+	atomicNotify(statusPtr, 1)
+
+	// Block until the kernel moves status off PENDING. wait32 returns 1
+	// immediately if the value already differs, 0 when notified; a relaxed
+	// re-read guards against spurious wakeups (single-threaded guest, so a
+	// plain load observes the kernel's completed atomic store).
+	for {
+		kandeloWait32Step(statusPtr, chPending, -1)
+		if *statusPtr != chPending {
+			break
+		}
+	}
+
+	ret = *(*int64)(unsafe.Pointer(base + chReturn))
+	errno = *(*int32)(unsafe.Pointer(base + chErrno))
+
+	// Release the channel back to Idle for the next syscall.
+	atomicStore32(statusPtr, chIdle)
+	// SIGKILL is never a catchable signal. The host uses this channel marker
+	// to unwind a blocked instance after teardown or a committed process exit.
+	// Enter the non-returning import directly, as libc does: another ordinary
+	// syscall would repark the worker instead of releasing its realm.
+	if *(*uint32)(unsafe.Pointer(base + chSigSignum)) == 9 {
+		kernelExit(128 + 9)
+		for {
+		}
+	}
+	return ret, errno
+}
