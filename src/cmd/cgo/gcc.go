@@ -2344,8 +2344,9 @@ type typeConv struct {
 	goVoid                                 ast.Expr // _Ctype_void, denotes C's void
 	goVoidPtr                              ast.Expr // unsafe.Pointer or *byte
 
-	ptrSize int64
-	intSize int64
+	ptrSize  int64
+	intSize  int64
+	maxAlign int64
 }
 
 var tagGen int
@@ -2363,6 +2364,11 @@ var anonymousStructTag = make(map[*dwarf.StructType]string)
 func (c *typeConv) Init(ptrSize, intSize int64) {
 	c.ptrSize = ptrSize
 	c.intSize = intSize
+	c.maxAlign = ptrSize
+	if goarch == "wasm32" {
+		// wasm32 has four-byte pointers but eight-byte scalar alignment.
+		c.maxAlign = 8
+	}
 	c.m = make(map[string]*Type)
 	c.ptrs = make(map[string][]*Type)
 	c.getTypeIDs = make(map[string]bool)
@@ -2568,8 +2574,8 @@ func (c *typeConv) loadType(dtype dwarf.Type, pos token.Pos, parent string) *Typ
 		t.Align = 1
 
 	case *dwarf.EnumType:
-		if t.Align = t.Size; t.Align >= c.ptrSize {
-			t.Align = c.ptrSize
+		if t.Align = t.Size; t.Align >= c.maxAlign {
+			t.Align = c.maxAlign
 		}
 		t.C.Set("enum " + dt.EnumName)
 		signed := 0
@@ -2610,8 +2616,8 @@ func (c *typeConv) loadType(dtype dwarf.Type, pos token.Pos, parent string) *Typ
 		case 8:
 			t.Go = c.float64
 		}
-		if t.Align = t.Size; t.Align >= c.ptrSize {
-			t.Align = c.ptrSize
+		if t.Align = t.Size; t.Align >= c.maxAlign {
+			t.Align = c.maxAlign
 		}
 
 	case *dwarf.ComplexType:
@@ -2623,8 +2629,8 @@ func (c *typeConv) loadType(dtype dwarf.Type, pos token.Pos, parent string) *Typ
 		case 16:
 			t.Go = c.complex128
 		}
-		if t.Align = t.Size / 2; t.Align >= c.ptrSize {
-			t.Align = c.ptrSize
+		if t.Align = t.Size / 2; t.Align >= c.maxAlign {
+			t.Align = c.maxAlign
 		}
 
 	case *dwarf.FuncType:
@@ -2632,14 +2638,25 @@ func (c *typeConv) loadType(dtype dwarf.Type, pos token.Pos, parent string) *Typ
 		// directly between worlds, but we need to moderate those.
 		t.Go = c.uintptr
 		t.Align = c.ptrSize
+		if goarch == "wasm32" {
+			// A Wasm function pointer indexes a table, not linear memory.
+			// Reuse cgo's existing non-heap opaque-pointer semantics so
+			// low handles are not scanned or relocated as Go data pointers.
+			t.Go = c.Ident(incomplete)
+			if !*importRuntimeCgo {
+				t.Go = c.Ident("Incomplete") // runtime/cgo itself
+			}
+			t.Size = 0
+			t.C.Set("void")
+		}
 
 	case *dwarf.IntType:
 		if dt.BitSize > 0 {
 			fatalf("%s: unexpected: %d-bit int type - %s", lineno(pos), dt.BitSize, dtype)
 		}
 
-		if t.Align = t.Size; t.Align >= c.ptrSize {
-			t.Align = c.ptrSize
+		if t.Align = t.Size; t.Align >= c.maxAlign {
+			t.Align = c.maxAlign
 		}
 
 		switch t.Size {
@@ -2889,8 +2906,8 @@ func (c *typeConv) loadType(dtype dwarf.Type, pos token.Pos, parent string) *Typ
 			fatalf("%s: unexpected: %d-bit uint type - %s", lineno(pos), dt.BitSize, dtype)
 		}
 
-		if t.Align = t.Size; t.Align >= c.ptrSize {
-			t.Align = c.ptrSize
+		if t.Align = t.Size; t.Align >= c.maxAlign {
+			t.Align = c.maxAlign
 		}
 
 		switch t.Size {

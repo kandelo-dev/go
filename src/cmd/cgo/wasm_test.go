@@ -20,7 +20,7 @@ func TestKandeloWasmCgoPointerStructFields(t *testing.T) {
 	pointer := &dwarf.PtrType{CommonType: dwarf.CommonType{ByteSize: 4}, Type: integer}
 	array := &dwarf.ArrayType{Type: pointer, Count: 2}
 	converter := new(typeConv)
-	converter.Init(4, 8)
+	converter.Init(4, 4)
 	if _, ok := converter.Type(pointer, token.NoPos).Go.(*ast.StarExpr); !ok {
 		t.Fatal("C pointers must retain ordinary typed Go pointer fields")
 	}
@@ -154,5 +154,58 @@ func TestWasmPassiveDataIsNotAddressable(t *testing.T) {
 	}
 	if err := module.readData([]byte{1, 1, 4, 1}); err == nil {
 		t.Fatal("truncated passive bytes were accepted")
+	}
+}
+
+func TestWasm32FunctionPointersAreNotHeapPointers(t *testing.T) {
+	previousArch := goarch
+	goarch = "wasm32"
+	t.Cleanup(func() { goarch = previousArch })
+	function := &dwarf.FuncType{CommonType: dwarf.CommonType{ByteSize: -1}}
+	functionPointer := &dwarf.PtrType{CommonType: dwarf.CommonType{ByteSize: 4}, Type: function}
+	converter := new(typeConv)
+	converter.Init(4, 4)
+	mapped := converter.Type(functionPointer, token.NoPos)
+	converter.FinishType(token.NoPos)
+	pointer, ok := mapped.Go.(*ast.StarExpr)
+	if !ok {
+		t.Fatalf("function pointer type = %T", mapped.Go)
+	}
+	opaque, ok := pointer.X.(*ast.Ident)
+	if !ok || opaque.Name != incomplete {
+		t.Fatalf("function pointer must use cgo's non-heap opaque type: %#v", pointer.X)
+	}
+	if mapped.Size != 4 {
+		t.Fatalf("function pointer size = %d", mapped.Size)
+	}
+}
+
+func TestWasm32ScalarAlignment(t *testing.T) {
+	previousArch := goarch
+	goarch = "wasm32"
+	t.Cleanup(func() { goarch = previousArch })
+	converter := new(typeConv)
+	converter.Init(4, 4)
+	for _, test := range []struct {
+		name  string
+		dtype dwarf.Type
+		align int64
+	}{
+		{"int32", &dwarf.IntType{BasicType: dwarf.BasicType{CommonType: dwarf.CommonType{ByteSize: 4, Name: "int"}}}, 4},
+		{"int64", &dwarf.IntType{BasicType: dwarf.BasicType{CommonType: dwarf.CommonType{ByteSize: 8, Name: "long long int"}}}, 8},
+		{"float64", &dwarf.FloatType{BasicType: dwarf.BasicType{CommonType: dwarf.CommonType{ByteSize: 8, Name: "double"}}}, 8},
+		{"complex64", &dwarf.ComplexType{BasicType: dwarf.BasicType{CommonType: dwarf.CommonType{ByteSize: 8, Name: "complex float"}}}, 4},
+		{"complex128", &dwarf.ComplexType{BasicType: dwarf.BasicType{CommonType: dwarf.CommonType{ByteSize: 16, Name: "complex double"}}}, 8},
+	} {
+		if got := converter.Type(test.dtype, token.NoPos).Align; got != test.align {
+			t.Fatalf("%s alignment = %d, want %d", test.name, got, test.align)
+		}
+	}
+	integer := &Type{Size: 4, Align: 4, C: c("int"), Go: ast.NewIdent("int32")}
+	wide := &Type{Size: 8, Align: 8, C: c("long long"), Go: ast.NewIdent("int64")}
+	call := &Name{FuncType: &FuncType{Params: []*Type{integer, wide, integer}, Result: wide}}
+	layout, size := (&Package{PtrSize: 4}).structType(call)
+	if size != 32 || !strings.Contains(layout, "__pad4[4]") || !strings.Contains(layout, "__pad20[4]") {
+		t.Fatalf("wide frame: %d %s", size, layout)
 	}
 }
