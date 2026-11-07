@@ -40,6 +40,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -95,6 +96,42 @@ func pruneUndefsForWindows(ldr *loader.Loader, undefs, froms []loader.Sym) ([]lo
 	return newundefs, newfroms
 }
 
+// emptyBSDArchive accepts only an object-free BSD archive with a zero-entry
+// 32-bit index. Other BSD indexes remain unsupported; never skip real objects
+// or a malformed/nonempty index because a library happens to be optional.
+func emptyBSDArchive(f *bio.Reader, header ArHdr, fileSize int64) bool {
+	name, nameBytes := header.name, int64(0)
+	if strings.HasPrefix(name, "#1/") {
+		var err error
+		nameBytes, err = strconv.ParseInt(name[3:], 10, 64)
+		if err != nil || nameBytes <= 0 || nameBytes > 32 {
+			return false
+		}
+	}
+	size, err := strconv.ParseInt(header.size, 10, 64)
+	if err != nil || size != nameBytes+8 || fileSize != SARMAG+SAR_HDR+(size+1)&^1 || header.fmag != "`\n" {
+		return false
+	}
+	contents := make([]byte, size)
+	if _, err := io.ReadFull(f, contents); err != nil {
+		return false
+	}
+	if nameBytes != 0 {
+		name = strings.TrimRight(string(contents[:nameBytes]), "\x00")
+	}
+	if name != "__.SYMDEF" && name != "__.SYMDEF SORTED" {
+		return false
+	}
+	// Both the ranlib-entry byte count and string-table length must be zero.
+	// Zero is endian-independent, so empty archives need no host-endian guess.
+	for _, value := range contents[nameBytes:] {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // hostArchive reads an archive file holding host objects and links in
 // required objects. The general format is the same as a Go archive
 // file, but it has an armap listing symbols and the objects that
@@ -126,6 +163,16 @@ func hostArchive(ctxt *Link, name string) {
 		Exitf("%s is not an archive file", name)
 	}
 
+	// musl compatibility libraries can contain no objects. GNU ar emits just
+	// the magic in that case; Darwin's llvm-ar emits an empty BSD index.
+	info, err := f.File().Stat()
+	if err != nil {
+		Exitf("cannot stat archive %s: %v", name, err)
+	}
+	if info.Size() == SARMAG {
+		return
+	}
+
 	var arhdr ArHdr
 	l := nextar(f, f.Offset(), &arhdr)
 	if l <= 0 {
@@ -135,6 +182,8 @@ func hostArchive(ctxt *Link, name string) {
 	var armap archiveMap
 	if arhdr.name == "/" || arhdr.name == "/SYM64/" {
 		armap = readArmap(name, f, arhdr)
+	} else if ctxt.IsWasm() && emptyBSDArchive(f, arhdr, info.Size()) {
+		return
 	} else {
 		Exitf("%s missing armap", name)
 	}
