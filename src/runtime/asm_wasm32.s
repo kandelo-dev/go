@@ -292,8 +292,10 @@ TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
 	MOVD $0, CTXT
 	JMP runtime·morestack(SB)
 
+#ifndef GOOS_kandelo
 TEXT ·asmcgocall(SB), NOSPLIT, $0-0
 	UNDEF
+#endif
 
 #define DISPATCH(NAME, MAXSIZE) \
 	Get R0; \

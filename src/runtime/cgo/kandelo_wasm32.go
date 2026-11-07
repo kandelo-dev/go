@@ -1,4 +1,4 @@
-//go:build kandelo && wasm
+//go:build kandelo && wasm32
 
 package cgo
 

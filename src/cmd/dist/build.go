@@ -1320,7 +1320,7 @@ var cgoEnabled = map[string]bool{
 	"js/wasm":         false,
 	"wasip1/wasm":     false,
 	"wasip1/wasm32":   false,
-	"kandelo/wasm32":  false,
+	"kandelo/wasm32":  true,
 	"netbsd/386":      true,
 	"netbsd/amd64":    true,
 	"netbsd/arm":      true,

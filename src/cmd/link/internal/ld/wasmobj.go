@@ -409,9 +409,8 @@ func loadwasmobj(ctxt *Link, input *bio.Reader, _ string, length int64, name str
 			edge.SetOff(int32(relocation.Offset - function.BodyOffset))
 			edge.SetSiz(4)
 			edge.SetSym(target)
-			if edgeType == objabi.R_CALL || relocation.Type == 7 && relocation.Symbol.Kind == 0 {
-				ctxt.loader.SetAttrReachable(target, true)
-			}
+			// The normal dead-code traversal follows this edge only if its
+			// source is live. A reference in an unused C function is not a root.
 		}
 	}
 	for _, initializer := range object.InitFunctions {

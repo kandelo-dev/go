@@ -44,10 +44,10 @@ TEXT ·atomicWait32(SB), NOSPLIT, $0-20
 // func wasmThreadTramp()
 //
 // Fresh-instance thread entry for a second M spawned via kernel_clone. The host
-// calls table.get(PC_F)() on a brand-new WebAssembly.Instance, so on entry the
+// calls table.get(handle)(0) on a brand-new WebAssembly.Instance, so on entry the
 // g and SP wasm globals are ZERO: no Go stack and no current g exist yet. Before
 // any Go code runs, install SP and g from the handoff words the parent M wrote
-// in newosprocKandelo, mirroring how _rt0_wasm_kandelo bootstraps the main
+// in newosprocKandelo, mirroring how _rt0_wasm32_kandelo bootstraps the main
 // instance. Only after that may Go code (kandeloThreadEntry) run.
 //
 // The single i32 parameter every Go wasm function carries is the resume PC_B;
@@ -72,7 +72,7 @@ TEXT ·wasmThreadTramp(SB), NOSPLIT, $0
 	// signature (i32 PC_B) -> (i32 unwind flag): the host calls it as
 	// table.get(fnPtr)(0) and reads the i32 result as the thread exit status.
 	// The scheduler may unwind while switching goroutines. Resume the next PC
-	// from the Go stack, just as _rt0_wasm_kandelo does for the main M.
+	// from the Go stack, just as _rt0_wasm32_kandelo does for the main M.
 	I32Const $0
 	Call ·kandeloThreadEntry(SB)
 	Drop

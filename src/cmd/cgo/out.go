@@ -14,6 +14,7 @@ import (
 	"go/ast"
 	"go/printer"
 	"go/token"
+	"internal/buildcfg"
 	"internal/xcoff"
 	"io"
 	"os"
@@ -434,6 +435,16 @@ func dynimport(obj string) {
 		return
 	}
 
+	if buildcfg.GOOS == "kandelo" && buildcfg.GOARCH == "wasm32" {
+		module, err := readWasmDebugModule(obj)
+		if err != nil {
+			fatalf("cannot parse Kandelo Wasm object %s: %v", obj, err)
+		}
+		if err := module.checkStaticImports(); err != nil {
+			fatalf("%s: %v", obj, err)
+		}
+		return
+	}
 	fatalf("cannot parse %s as ELF, Mach-O, PE or XCOFF", obj)
 }
 

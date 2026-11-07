@@ -1,4 +1,4 @@
-//go:build kandelo && wasm
+//go:build kandelo && wasm32
 
 #include <stddef.h>
 #include <stdint.h>
@@ -38,12 +38,13 @@ struct kandelo_cgo_startup_args {
 void x_cgo_kandelo_init(void *arg)
 {
 	struct kandelo_cgo_startup_args *startup = arg;
+	uint32_t index;
 	if (!startup)
 		__builtin_trap();
 	__init_libc((char **)(uintptr_t)startup->envp,
 		(char *)(uintptr_t)startup->program_name);
 	x_crosscall2_ptr = crosscall2;
-	for (uint32_t index = 0; index < __kandelo_cgo_ctor_count; ++index)
+	for (index = 0; index < __kandelo_cgo_ctor_count; ++index)
 		__kandelo_cgo_ctors[index]();
 }
 

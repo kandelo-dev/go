@@ -53,6 +53,8 @@ const (
 type wasm32State struct {
 	funcIndex         map[loader.Sym]uint32
 	funcEntries       loader.Sym
+	cgoSignatures     map[loader.Sym]uint8
+	cgoSignatureTable loader.Sym
 	unreachableMethod loader.Sym
 }
 
@@ -61,6 +63,30 @@ func (st *wasm32State) gentext(ctxt *ld.Link, ldr *loader.Loader) {
 		return
 	}
 
+	// Go's cgo_import_static declarations take addresses of C functions.
+	// Unlike logical Go PCs, these addresses use the C ABI's table handles.
+	// Rewrite before constructing PC metadata, which must retain logical PCs.
+	for source := loader.Sym(1); source < loader.Sym(ldr.NSym()); source++ {
+		relocs := ldr.Relocs(source)
+		var builder *loader.SymbolBuilder
+		for index := 0; index < relocs.Count(); index++ {
+			relocation := relocs.At(index)
+			if relocation.Type() != objabi.R_ADDR {
+				continue
+			}
+			if _, cFunction := ctxt.WasmHostFunctions[relocation.Sym()]; !cFunction {
+				continue
+			}
+			if relocation.Add() != 0 {
+				ldr.Errorf(source, "C function address has a nonzero offset: %s", ldr.SymName(relocation.Sym()))
+				continue
+			}
+			if builder == nil {
+				builder = ldr.MakeSymbolUpdater(source)
+			}
+			builder.SetRelocType(index, objabi.R_WASMFCALL)
+		}
+	}
 	st.funcIndex = make(map[loader.Sym]uint32, len(ctxt.Textp))
 	abiVersion := sym.SymVerABIInternal
 	if !buildcfg.Experiment.RegabiWrappers {
@@ -75,6 +101,29 @@ func (st *wasm32State) gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	entries.SetSize(int64(len(ctxt.Textp)+1) * 4)
 	entries.Grow(entries.Size())
 	st.funcEntries = entries.Sym()
+
+	// asmcgocall must use the exact Wasm signature: ordinary cgo wrappers
+	// return void, while the two-result (errno) wrappers return i32.
+	st.cgoSignatures = make(map[loader.Sym]uint8)
+	for function, host := range ctxt.WasmHostFunctions {
+		signature := host.Function.Type
+		if !bytes.Equal(signature.Params, []byte{I32}) {
+			continue
+		}
+		if len(signature.Results) == 0 {
+			st.cgoSignatures[function] = 1
+		} else if bytes.Equal(signature.Results, []byte{I32}) {
+			st.cgoSignatures[function] = 2
+		}
+	}
+	if len(st.cgoSignatures) != 0 {
+		signatures := ldr.CreateSymForUpdate("runtime.wasmCgoCallSignatures", 0)
+		signatures.SetType(sym.SRODATA)
+		signatures.SetAlign(1)
+		signatures.SetSize(int64(len(ctxt.Textp) + 1))
+		signatures.Grow(signatures.Size())
+		st.cgoSignatureTable = signatures.Sym()
+	}
 
 	count := ldr.CreateSymForUpdate("runtime.wasmFuncCountData", 0)
 	count.SetType(sym.SRODATA)
@@ -248,6 +297,11 @@ func (st *wasm32State) assignAddress(arch *sys.Arch, ldr *loader.Loader, sect *s
 			st.funcIndex[s] = handle
 			entries := ldr.MakeSymbolUpdater(st.funcEntries)
 			entries.SetAddr(arch, int64(handle)*4, s)
+			if st.cgoSignatureTable != 0 {
+				signatures := ldr.MakeSymbolUpdater(st.cgoSignatureTable)
+				signatures.SetUint8(arch, int64(handle), st.cgoSignatures[s])
+			}
+
 		}
 	}
 	return sect, n, next

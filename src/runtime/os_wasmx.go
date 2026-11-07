@@ -46,23 +46,6 @@ func sigpanic() {
 // FIXME: wasm doesn't have atomic yet
 func exitThread(wait *atomic.Uint32)
 
-type mOS struct {
-	// channelBase is this M's base address of the Kandelo syscall channel
-	// region in linear memory. Each M (its own WebAssembly.Instance over the
-	// shared memory) gets its own channel, so the base must be per-M rather
-	// than a single package word. The main M captures it in osinit; a future
-	// thread M captures it in its entry trampoline (see channel_kandelo.go,
-	// kandeloInitChannelBase). Unused on GOOS=js and GOOS=wasip1.
-	channelBase             uintptr
-	cgoChannelBase          uint32
-	callbackCurgStackOffset uintptr
-	callbackCurgPC          uintptr
-	callbackG0SP            uintptr
-	foreignCStackActive     uintptr
-	clockTimespec           [2]int64
-	signalDeliveryActive    bool
-}
-
 func osyield()
 
 //go:nosplit

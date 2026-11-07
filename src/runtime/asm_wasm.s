@@ -273,47 +273,7 @@ TEXT runtime·morestack_noctxt(SB),NOSPLIT,$0
 	JMP runtime·morestack(SB)
 
 TEXT ·asmcgocall(SB), NOSPLIT, $0-0
-	MOVD g_m(g), R2
-	MOVD $runtime·m0(SB), R3
-	Get R2
-	Get R3
-	I64Eq
-	If
-		MOVD $runtime·cgoCStack+(8<<20)(SB), R1
-	Else
-		MOVD m_cgoThread(R2), R1
-	End
-	Get R1
-	I64Eqz
-	If
-		MOVD (m_mOS+mOS_foreignCStackActive)(R2), R1
-		Get R1
-		I64Eqz
-		If
-			UNDEF
-		End
-	End
-	I64Load fn+0(FP)
-	I64Const $16
-	I64ShrU
-	Set R0
-	I64Load arg+8(FP)
-	I32WrapI64
-	Get R0
-	I32WrapI64
-	CallIndirect $1
-	MOVW $0, ret+16(FP)
-	RET
-
-#ifdef GOOS_kandelo
-TEXT _cgo_topofstack(SB), NOSPLIT|NOFRAME, $0
-	MOVD g_m(g), R1
-	MOVD m_curg(R1), R2
-	MOVD g_stack+stack_hi(R2), R3
-	Get R3
-	I32WrapI64
-	Return
-#endif
+	UNDEF
 
 #define DISPATCH(NAME, MAXSIZE) \
 	Get R0; \
@@ -457,12 +417,6 @@ TEXT runtime·goexit(SB), NOSPLIT|TOPFRAME, $0-0
 
 TEXT runtime·cgocallback(SB), NOSPLIT, $0-24
 	UNDEF
-
-#ifdef GOOS_kandelo
-TEXT runtime·setg(SB), NOSPLIT, $0-8
-	MOVD gg+0(FP), g
-	RET
-#endif
 
 // gcWriteBarrier informs the GC about heap pointer writes.
 //

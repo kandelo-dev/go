@@ -6,13 +6,13 @@
 
 // Real WebAssembly atomic operations for the kandelo port.
 //
-// Unlike the js and wasip1 ports (see atomic_wasm.go), kandelo runs on SHARED
+// Unlike the js and wasip1 ports (see atomic_wasmx.go), kandelo runs on SHARED
 // linear memory, so it uses the genuine atomic memory instructions from the
 // WebAssembly threads proposal (0xFE-prefix opcodes) instead of plain memory
 // access. This makes the exported atomic API sound for a future multi-M
 // scheduler. The low-level opcodes are emitted by the thin assembly helpers in
-// atomic_kandelo.s; the wrappers below adapt them to the exact function set and
-// signatures of atomic_wasm.go.
+// atomic_kandelo_wasm32.s; the wrappers below adapt them to the exact function set and
+// signatures of atomic_wasmx.go.
 //
 // Mapping notes:
 //   - The wasm rmw.add/and/or/xchg ops return the PRIOR value. Xadd* therefore
@@ -27,7 +27,7 @@ package atomic
 
 import "unsafe"
 
-// Low-level primitives implemented in atomic_kandelo.s. Each emits a single
+// Low-level primitives implemented in atomic_kandelo_wasm32.s. Each emits a single
 // WebAssembly threads-proposal atomic instruction. rmw primitives return the
 // prior value; the cmpxchg primitives return the loaded value.
 

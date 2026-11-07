@@ -118,3 +118,41 @@ func TestReadWasmDebugModuleWithImportedGlobal(t *testing.T) {
 		t.Fatalf("memory = %v", contents)
 	}
 }
+
+func TestWasmStaticImportNamespaces(t *testing.T) {
+	for _, name := range []string{"env", "kernel", "native-library"} {
+		payload := []byte{1}
+		payload = binary.AppendUvarint(payload, uint64(len(name)))
+		payload = append(payload, name...)
+		payload = append(payload, 1, 'f', 0, 0) // one function import, type index zero
+		module := new(wasmDebugModule)
+		if err := module.readImports(payload); err != nil {
+			t.Fatal(err)
+		}
+		err := module.checkStaticImports()
+		if name == "native-library" {
+			if err == nil {
+				t.Fatal("unsupported dynamic library import was accepted")
+			}
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestWasmPassiveDataIsNotAddressable(t *testing.T) {
+	module := &wasmDebugModule{globalExports: map[string]uint64{"value": 32}}
+	// One passive segment; its contents must not be assigned an invented address.
+	if err := module.readData([]byte{1, 1, 4, 1, 2, 3, 4}); err != nil {
+		t.Fatal(err)
+	}
+	if len(module.dataSegments) != 0 {
+		t.Fatal("passive segment became active")
+	}
+	if _, err := module.memory("value", 4); err == nil {
+		t.Fatal("passive constants were treated as initialized memory")
+	}
+	if err := module.readData([]byte{1, 1, 4, 1}); err == nil {
+		t.Fatal("truncated passive bytes were accepted")
+	}
+}

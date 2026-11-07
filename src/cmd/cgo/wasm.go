@@ -17,6 +17,7 @@ type wasmDataSegment struct {
 
 type wasmDebugModule struct {
 	sections        map[string][]byte
+	importModules   []string
 	importedGlobals uint64
 	globalValues    []uint64
 	globalExports   map[string]uint64
@@ -165,9 +166,11 @@ func (module *wasmDebugModule) readImports(section []byte) error {
 		return err
 	}
 	for range count {
-		if _, err := wasmBytes(section, &offset); err != nil {
+		name, err := wasmBytes(section, &offset)
+		if err != nil {
 			return err
 		}
+		module.importModules = append(module.importModules, string(name))
 		if _, err := wasmBytes(section, &offset); err != nil {
 			return err
 		}
@@ -283,6 +286,14 @@ func (module *wasmDebugModule) readData(section []byte) error {
 		if err != nil {
 			return err
 		}
+		if mode == 1 {
+			// Passive bytes have no address until memory.init executes. Parse
+			// their payload but do not expose them as initialized constants.
+			if _, err := wasmBytes(section, &offset); err != nil {
+				return err
+			}
+			continue
+		}
 		if mode == 2 {
 			memoryIndex, err := wasmUnsigned(section, &offset)
 			if err != nil || memoryIndex != 0 {
@@ -365,4 +376,15 @@ func (module *wasmDebugModule) constants(count int) ([]int64, []float64, []strin
 		strings[index] = string(stringBytes)
 	}
 	return integers, floats, strings, nil
+}
+
+// checkStaticImports rejects native dynamic-library bindings: Kandelo cgo
+// links C archives into one module and resolves these host namespaces itself.
+func (module *wasmDebugModule) checkStaticImports() error {
+	for _, name := range module.importModules {
+		if name != "env" && name != "kernel" {
+			return fmt.Errorf("unsupported Kandelo Wasm import module %q", name)
+		}
+	}
+	return nil
 }
