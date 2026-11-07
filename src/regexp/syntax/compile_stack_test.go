@@ -4,7 +4,10 @@
 
 package syntax
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestCompileDeepConcat(t *testing.T) {
 	const depth = 10000
@@ -68,5 +71,70 @@ func TestCompileDeepCapture(t *testing.T) {
 	}
 	if p.Inst[0].Op != InstFail || p.Inst[len(p.Inst)-1].Op != InstMatch {
 		t.Fatal("incorrect program boundaries")
+	}
+}
+
+// Concurrent compilers must not share traversal state, including when the
+// scratch storage is reused after compiling a different expression.
+func TestCompileConcurrent(t *testing.T) {
+	patterns := []string{`(a*?){0,100}?`, `(b|c){2,40}`, `(?i:(a+?)(b|c)*?)`}
+	expressions := make([]*Regexp, len(patterns))
+	programs := make([]string, len(patterns))
+	for i, pattern := range patterns {
+		re, err := Parse(pattern, Perl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expressions[i] = re.Simplify()
+		p, err := Compile(expressions[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		programs[i] = p.String()
+	}
+	var workers sync.WaitGroup
+	for worker := range 8 {
+		workers.Go(func() {
+			for iteration := range 40 {
+				i := (worker + iteration) % len(expressions)
+				got, err := Compile(expressions[i])
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if got.String() != programs[i] {
+					t.Errorf("concurrent compilation changed %q", patterns[i])
+					return
+				}
+			}
+		})
+	}
+	workers.Wait()
+}
+
+// Parse and simplify outside the timed region to measure compilation rather
+// than the parser or construction of the expression tree.
+func BenchmarkCompileTraversal(b *testing.B) {
+	for _, tt := range []struct{ name, pattern string }{
+		{"Literal", "a"},
+		{"LiteralText", "hello, world!"},
+		{"Class", `[A-Z][a-z0-9_]+`},
+		{"Capture", `(a+?)(b|c)*?`},
+		{"BoundedLazy", `(a*?){0,20}?`},
+		{"URL", `^www\.[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-z]+(?:[/#?][-a-zA-Z0-9@:%_\+.~#!?&/=\(\);,'">\^{}\[\]` + "`" + `]*)?`},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			re, err := Parse(tt.pattern, Perl)
+			if err != nil {
+				b.Fatal(err)
+			}
+			re = re.Simplify()
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := Compile(re); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

@@ -4,7 +4,10 @@
 
 package syntax
 
-import "unicode"
+import (
+	"sync"
+	"unicode"
+)
 
 // A patchList is a list of instruction pointers that need to be filled in (patched).
 // Because the pointers haven't been filled in yet, we can reuse their storage
@@ -92,59 +95,78 @@ type compileFrame struct {
 	f    frag
 }
 
+type compileStack struct {
+	frames []compileFrame
+}
+
+var compileStackPool sync.Pool
+
+func (c *compiler) compileLeaf(re *Regexp) frag {
+	var f frag
+	switch re.Op {
+	case OpNoMatch:
+		f = c.fail()
+	case OpEmptyMatch:
+		f = c.nop()
+	case OpLiteral:
+		if len(re.Rune) == 0 {
+			f = c.nop()
+			break
+		}
+		for j := range re.Rune {
+			f1 := c.rune(re.Rune[j:j+1], re.Flags)
+			if j == 0 {
+				f = f1
+			} else {
+				f = c.cat(f, f1)
+			}
+		}
+	case OpCharClass:
+		f = c.rune(re.Rune, re.Flags)
+	case OpAnyCharNotNL:
+		f = c.rune(anyRuneNotNL, 0)
+	case OpAnyChar:
+		f = c.rune(anyRune, 0)
+	case OpBeginLine:
+		f = c.empty(EmptyBeginLine)
+	case OpEndLine:
+		f = c.empty(EmptyEndLine)
+	case OpBeginText:
+		f = c.empty(EmptyBeginText)
+	case OpEndText:
+		f = c.empty(EmptyEndText)
+	case OpWordBoundary:
+		f = c.empty(EmptyWordBoundary)
+	case OpNoWordBoundary:
+		f = c.empty(EmptyNoWordBoundary)
+	default:
+		panic("regexp: unhandled case in compile")
+	}
+	return f
+}
+
 func (c *compiler) compile(re *Regexp) frag {
+	// Operations before OpCapture have no children and need no traversal stack.
+	if re.Op < OpCapture {
+		return c.compileLeaf(re)
+	}
 	// Simplify can create deep expressions from counted repetitions. Use an
 	// explicit stack so compiling them does not require deep call stacks.
 	var inline [8]compileFrame
 	stack := inline[:0]
+	var scratch *compileStack
 	var f frag
 compile:
 	for {
+		var parent compileFrame
 		switch re.Op {
-		case OpNoMatch:
-			f = c.fail()
-		case OpEmptyMatch:
-			f = c.nop()
-		case OpLiteral:
-			if len(re.Rune) == 0 {
-				f = c.nop()
-				break
-			}
-			for j := range re.Rune {
-				f1 := c.rune(re.Rune[j:j+1], re.Flags)
-				if j == 0 {
-					f = f1
-				} else {
-					f = c.cat(f, f1)
-				}
-			}
-		case OpCharClass:
-			f = c.rune(re.Rune, re.Flags)
-		case OpAnyCharNotNL:
-			f = c.rune(anyRuneNotNL, 0)
-		case OpAnyChar:
-			f = c.rune(anyRune, 0)
-		case OpBeginLine:
-			f = c.empty(EmptyBeginLine)
-		case OpEndLine:
-			f = c.empty(EmptyEndLine)
-		case OpBeginText:
-			f = c.empty(EmptyBeginText)
-		case OpEndText:
-			f = c.empty(EmptyEndText)
-		case OpWordBoundary:
-			f = c.empty(EmptyWordBoundary)
-		case OpNoWordBoundary:
-			f = c.empty(EmptyNoWordBoundary)
 		case OpCapture:
 			opening := c.cap(uint32(re.Cap << 1))
-			stack = append(stack, compileFrame{re: re, f: opening})
-			re = re.Sub[0]
-			continue
+			parent = compileFrame{re: re, f: opening}
+			goto descend
 		case OpStar, OpPlus, OpQuest:
-			stack = append(stack, compileFrame{re: re})
-			re = re.Sub[0]
-			continue
+			parent = compileFrame{re: re}
+			goto descend
 		case OpConcat, OpAlternate:
 			if len(re.Sub) == 0 {
 				if re.Op == OpConcat {
@@ -154,11 +176,10 @@ compile:
 				}
 				break
 			}
-			stack = append(stack, compileFrame{re: re, next: 1})
-			re = re.Sub[0]
-			continue
+			parent = compileFrame{re: re, next: 1}
+			goto descend
 		default:
-			panic("regexp: unhandled case in compile")
+			f = c.compileLeaf(re)
 		}
 
 		// f is the completed child. Resume its parent, preserving the
@@ -190,9 +211,37 @@ compile:
 				}
 				f = frame.f
 			}
+			// A pooled stack must not keep the expression tree alive.
+			frame.re = nil
 			stack = stack[:len(stack)-1]
 		}
+		if scratch != nil && cap(stack) <= 4096 {
+			// Do not retain oversized buffers from exceptional hand-built trees.
+			scratch.frames = scratch.frames[:0]
+			compileStackPool.Put(scratch)
+		}
 		return f
+
+	descend:
+		if len(stack) == cap(stack) && scratch == nil {
+			// Shallow expressions use the inline buffer. Reuse larger stacks
+			// instead of allocating one at every compile of a deep expression.
+			scratch, _ = compileStackPool.Get().(*compileStack)
+			if scratch == nil {
+				scratch = &compileStack{frames: make([]compileFrame, 0, 2*len(stack))}
+			}
+			scratch.frames = append(scratch.frames[:0], stack...)
+			stack = scratch.frames
+		}
+		if scratch == nil {
+			stack = append(stack, parent)
+		} else {
+			// Keep the pooled slice separate so the inline array stays on the
+			// goroutine stack rather than escaping through the pool.
+			scratch.frames = append(scratch.frames[:len(stack)], parent)
+			stack = scratch.frames
+		}
+		re = re.Sub[0]
 	}
 }
 
