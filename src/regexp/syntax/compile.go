@@ -86,76 +86,114 @@ func (c *compiler) init() {
 var anyRuneNotNL = []rune{0, '\n' - 1, '\n' + 1, unicode.MaxRune}
 var anyRune = []rune{0, unicode.MaxRune}
 
+type compileFrame struct {
+	re   *Regexp
+	next int
+	f    frag
+}
+
 func (c *compiler) compile(re *Regexp) frag {
-	switch re.Op {
-	case OpNoMatch:
-		return c.fail()
-	case OpEmptyMatch:
-		return c.nop()
-	case OpLiteral:
-		if len(re.Rune) == 0 {
-			return c.nop()
-		}
-		var f frag
-		for j := range re.Rune {
-			f1 := c.rune(re.Rune[j:j+1], re.Flags)
-			if j == 0 {
-				f = f1
-			} else {
-				f = c.cat(f, f1)
+	// Simplify can create deep expressions from counted repetitions. Use an
+	// explicit stack so compiling them does not require deep call stacks.
+	var inline [8]compileFrame
+	stack := inline[:0]
+	var f frag
+compile:
+	for {
+		switch re.Op {
+		case OpNoMatch:
+			f = c.fail()
+		case OpEmptyMatch:
+			f = c.nop()
+		case OpLiteral:
+			if len(re.Rune) == 0 {
+				f = c.nop()
+				break
 			}
-		}
-		return f
-	case OpCharClass:
-		return c.rune(re.Rune, re.Flags)
-	case OpAnyCharNotNL:
-		return c.rune(anyRuneNotNL, 0)
-	case OpAnyChar:
-		return c.rune(anyRune, 0)
-	case OpBeginLine:
-		return c.empty(EmptyBeginLine)
-	case OpEndLine:
-		return c.empty(EmptyEndLine)
-	case OpBeginText:
-		return c.empty(EmptyBeginText)
-	case OpEndText:
-		return c.empty(EmptyEndText)
-	case OpWordBoundary:
-		return c.empty(EmptyWordBoundary)
-	case OpNoWordBoundary:
-		return c.empty(EmptyNoWordBoundary)
-	case OpCapture:
-		bra := c.cap(uint32(re.Cap << 1))
-		sub := c.compile(re.Sub[0])
-		ket := c.cap(uint32(re.Cap<<1 | 1))
-		return c.cat(c.cat(bra, sub), ket)
-	case OpStar:
-		return c.star(c.compile(re.Sub[0]), re.Flags&NonGreedy != 0)
-	case OpPlus:
-		return c.plus(c.compile(re.Sub[0]), re.Flags&NonGreedy != 0)
-	case OpQuest:
-		return c.quest(c.compile(re.Sub[0]), re.Flags&NonGreedy != 0)
-	case OpConcat:
-		if len(re.Sub) == 0 {
-			return c.nop()
-		}
-		var f frag
-		for i, sub := range re.Sub {
-			if i == 0 {
-				f = c.compile(sub)
-			} else {
-				f = c.cat(f, c.compile(sub))
+			for j := range re.Rune {
+				f1 := c.rune(re.Rune[j:j+1], re.Flags)
+				if j == 0 {
+					f = f1
+				} else {
+					f = c.cat(f, f1)
+				}
 			}
+		case OpCharClass:
+			f = c.rune(re.Rune, re.Flags)
+		case OpAnyCharNotNL:
+			f = c.rune(anyRuneNotNL, 0)
+		case OpAnyChar:
+			f = c.rune(anyRune, 0)
+		case OpBeginLine:
+			f = c.empty(EmptyBeginLine)
+		case OpEndLine:
+			f = c.empty(EmptyEndLine)
+		case OpBeginText:
+			f = c.empty(EmptyBeginText)
+		case OpEndText:
+			f = c.empty(EmptyEndText)
+		case OpWordBoundary:
+			f = c.empty(EmptyWordBoundary)
+		case OpNoWordBoundary:
+			f = c.empty(EmptyNoWordBoundary)
+		case OpCapture:
+			opening := c.cap(uint32(re.Cap << 1))
+			stack = append(stack, compileFrame{re: re, f: opening})
+			re = re.Sub[0]
+			continue
+		case OpStar, OpPlus, OpQuest:
+			stack = append(stack, compileFrame{re: re})
+			re = re.Sub[0]
+			continue
+		case OpConcat, OpAlternate:
+			if len(re.Sub) == 0 {
+				if re.Op == OpConcat {
+					f = c.nop()
+				} else {
+					f = c.fail()
+				}
+				break
+			}
+			stack = append(stack, compileFrame{re: re, next: 1})
+			re = re.Sub[0]
+			continue
+		default:
+			panic("regexp: unhandled case in compile")
 		}
-		return f
-	case OpAlternate:
-		var f frag
-		for _, sub := range re.Sub {
-			f = c.alt(f, c.compile(sub))
+
+		// f is the completed child. Resume its parent, preserving the
+		// recursive compiler's instruction emission and patching order.
+		for len(stack) > 0 {
+			frame := &stack[len(stack)-1]
+			switch frame.re.Op {
+			case OpCapture:
+				closing := c.cap(uint32(frame.re.Cap<<1 | 1))
+				f = c.cat(c.cat(frame.f, f), closing)
+			case OpStar:
+				f = c.star(f, frame.re.Flags&NonGreedy != 0)
+			case OpPlus:
+				f = c.plus(f, frame.re.Flags&NonGreedy != 0)
+			case OpQuest:
+				f = c.quest(f, frame.re.Flags&NonGreedy != 0)
+			case OpConcat, OpAlternate:
+				if frame.re.Op == OpAlternate {
+					frame.f = c.alt(frame.f, f)
+				} else if frame.next == 1 {
+					frame.f = f
+				} else {
+					frame.f = c.cat(frame.f, f)
+				}
+				if frame.next < len(frame.re.Sub) {
+					re = frame.re.Sub[frame.next]
+					frame.next++
+					continue compile
+				}
+				f = frame.f
+			}
+			stack = stack[:len(stack)-1]
 		}
 		return f
 	}
-	panic("regexp: unhandled case in compile")
 }
 
 func (c *compiler) inst(op InstOp) frag {
