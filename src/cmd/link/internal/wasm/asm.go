@@ -847,8 +847,8 @@ func (st *wasm32State) asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		// kandeloABIVersion must stay in sync with ABI_VERSION in the Kandelo
 		// repository's crates/program-abi/src/lib.rs. It is hardcoded here; when
 		// upstream Kandelo bumps ABI_VERSION, bump this to match (the host
-		// hard-rejects a mismatched marker). Last synced: ABI 55.
-		const kandeloABIVersion = 55
+		// hard-rejects a mismatched marker). Last synced: ABI 56.
+		const kandeloABIVersion = 56
 		abiType := lookupType(&wasmFuncType{Results: []byte{I32}}, &types)
 		var body bytes.Buffer
 		writeUleb128(&body, 0)                  // local declaration count
@@ -965,6 +965,21 @@ func (st *wasm32State) asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
 	writeProducerSec(ctxt)
+	if buildcfg.GOOS == "kandelo" {
+		// Match libc/glue/kandelo-abi-contract.txt from the ABI-56 SDK.
+		// The digest belongs to this linker revision so a newer SDK cannot
+		// accidentally label output from an older runtime as compatible.
+		digest := [...]byte{
+		0x54, 0xb1, 0x13, 0xfe, 0x33, 0xc9, 0x1c, 0x5c,
+		0x45, 0x43, 0xf2, 0x92, 0xd1, 0xee, 0x83, 0x67,
+		0x8c, 0xc8, 0xd2, 0x7f, 0xb8, 0x91, 0xc0, 0xf6,
+		0x3d, 0xc9, 0x23, 0x11, 0x8c, 0xc5, 0x8f, 0x43,
+		}
+		sizeOffset := writeSecHeader(ctxt, sectionCustom)
+		writeName(ctxt.Out, "kandelo.abi.contract")
+		ctxt.Out.Write(digest[:])
+		writeSecSize(ctxt, sizeOffset)
+	}
 	if !*ld.FlagS {
 		writeNameSec(ctxt, len(hostImports), fns)
 	}
