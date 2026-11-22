@@ -24,12 +24,26 @@ TEXT runtime·wasmDiv(SB), NOSPLIT, $0-0
 	I64DivS
 	Return
 
-TEXT runtime·exitThread(SB), NOSPLIT, $0-0
 #ifdef GOOS_kandelo
+// kernelExit's Wasm import wrapper reads its status at SP+8. Switch to a
+// permanent zero frame before publishing that the retiring stack is free.
+GLOBL runtime·kandeloThreadExitFrame(SB), RODATA|NOPTR, $16
+
+TEXT runtime·exitThread(SB), NOSPLIT|NOFRAME, $0-4
+	I32Load wait+0(FP)
+	MOVD $runtime·kandeloThreadExitFrame(SB), R0
+	Get R0
+	I32WrapI64
+	Set SP
 	I32Const $0
-	Call runtime·kernelThreadExit(SB)
-#endif
+	I32AtomicStore
+	I32Const $0
+	Call runtime·kernelExit(SB)
 	UNDEF
+#else
+TEXT runtime·exitThread(SB), NOSPLIT, $0-0
+	UNDEF
+#endif
 
 TEXT runtime·osyield(SB), NOSPLIT, $0-0
 #ifdef GOOS_kandelo
