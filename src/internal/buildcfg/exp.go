@@ -87,6 +87,9 @@ func ParseGOEXPERIMENT(goos, goarch, goexp string) (*ExperimentFlags, error) {
 		JSONv2:                true,
 		MapSplitGroup:         true,
 		GoListExportNewFormat: true,
+		// Kandelo has a scheduler monitor but Wasm cannot asynchronously
+		// interrupt a running worker. Poll on loop backedges for requests.
+		PreemptibleLoops: goos == "kandelo",
 	}
 	flags := &ExperimentFlags{
 		Flags:    baseline,
